@@ -1,0 +1,43 @@
+// Tailnet access policy for an LLM server.
+//
+// Paste into https://login.tailscale.com/admin/acls/file after replacing
+// YOUR-LOGIN below with your login as shown on the admin console's Users page
+// (for example alice@github or alice@example.com).
+//
+// Apply it BEFORE running scripts/2-tailscale.sh: a machine can only advertise
+// tag:llm-server if the policy names who may apply that tag.
+//
+// Defining `grants` makes the tailnet default-deny. Anything not listed below
+// is refused. Keep that in mind if the tailnet has other devices that need to
+// reach each other -- add grants for them too.
+
+{
+	"tagOwners": {
+		// Tagged devices have no owner, so the tag needs one. Tagged devices
+		// also have key expiry disabled, which is what you want for a server.
+		"tag:llm-server": ["autogroup:admin"],
+	},
+
+	"grants": [
+		{
+			"src": ["YOUR-LOGIN"],
+			"dst": ["tag:llm-server"],
+			// Ports belong in `ip`. Appending them to `dst` is the older ACL
+			// syntax and does not work in a grant.
+			"ip": [
+				"tcp:443", // the inference endpoint (tailscale serve)
+				"tcp:22",  // SSH, if Remote Login is on
+				"tcp:5900", // Screen Sharing, if on (README, step 6)
+				// Sunshine, if installed (docs/omarchy-client.md, 7b). Its web
+				// UI, 47990, stays out: it is reached through SSH.
+				"tcp:47984", "tcp:47989", "tcp:48010", "udp:47998-48000",
+			],
+		},
+	],
+}
+
+// Also, in the admin console (not expressible in this file):
+//   - DNS page: enable MagicDNS and HTTPS Certificates.
+//     `tailscale serve` needs both.
+//   - Settings -> Device management: enable Device approval, so a leaked auth
+//     key alone is not enough to join the tailnet and reach the endpoint.

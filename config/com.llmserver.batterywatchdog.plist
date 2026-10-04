@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Laptops only. Rendered by scripts/4-harden.sh. See llm-battery-watchdog.sh.
+     The script path and the log folder must match LLM_SBIN and LLM_LOGS in
+     scripts/lib.sh. -->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.llmserver.batterywatchdog</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/sbin/llm-battery-watchdog.sh</string>
+	</array>
+	<key>StartInterval</key>
+	<integer>60</integer>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardErrorPath</key>
+	<string>/Library/Logs/llm-server/battery-watchdog.err.log</string>
+</dict>
+</plist>

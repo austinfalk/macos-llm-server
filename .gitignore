@@ -1,0 +1,16 @@
+# Local settings, and the state of the machine this checkout runs on
+config.env
+config.env.*
+!config.env.example
+NEXT.md
+
+# Never commit the API key (it lives in ~/.config/tensorfold/, but be safe)
+api-key
+api-keys
+*.pem
+*.key
+*.p12
+id_*
+
+.DS_Store
+__pycache__/
