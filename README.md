@@ -57,7 +57,7 @@ working default, and the file explains each one.
 
 ## 1. Choose a model
 
-Pick one of [TensorFold's recipes](https://github.com/ashhart/TensorFold/blob/v0.6.5/docs/recipes/README.md):
+Pick one of [TensorFold's recipes](https://github.com/ashhart/TensorFold/blob/v0.6.6/docs/recipes/README.md):
 each names a checkpoint, and often a draft model that makes it write faster.
 `tensorfold models` lists them, and `tensorfold info MODEL` checks one without
 downloading it.
@@ -129,7 +129,15 @@ sh scripts/1-install.sh
 ```
 
 Installs `tailscale` from Homebrew and TensorFold from [its own Homebrew tap](https://github.com/ashhart/homebrew-tensorfold),
-and keeps the model cache out of Time Machine. If the Tailscale app is
+and keeps the model cache out of Time Machine.
+
+**Which TensorFold.** The tap has two formulas. `tensorfold@0.6` is TensorFold's
+Python line, 0.6.6: it serves every recipe above and has the `tensorfold
+service` manager this setup uses. `tensorfold` is its native 1.0 engine, which
+so far qualifies Nemotron 3.5 Lightning only on M1-M4 Macs, reuses no prompts
+for it between turns, and ships no service manager. This guide uses
+`tensorfold@0.6` and will move when the native engine serves the recommended
+model. The formula is keg-only; the script links its `tensorfold` command. If the Tailscale app is
 installed, the script warns you: this setup runs Homebrew's `tailscaled`
 instead, and running both has not been tested.
 
@@ -184,8 +192,7 @@ clients use is `local-model`. The key is the `clients:` line of
   your login session, which starts at login and stops at logout; it refuses
   root. The one setting changed from its defaults is the interpreter path:
   the default points into Homebrew's versioned folder, which the next
-  `brew upgrade tensorfold` deletes, so the script uses Homebrew's stable
-  `opt` link instead.
+  upgrade deletes, so the script uses Homebrew's stable `opt` link instead.
 - **The key is TensorFold's.** It checks `Authorization: Bearer` and
   `x-api-key` itself, on every route except `/health`, which then says only
   `ok`. Its HTTP API has no model management, so the key opens the model and
@@ -303,7 +310,7 @@ that runs out while thinking comes back empty. **Tell clients the context
 window** TensorFold reports at startup — 144,384 tokens for the 27B here
 (`tensorfold service logs local-model`) — so they compact before reaching it.
 
-**Which tools work** (TensorFold 0.6.5, Qwen3.8-27B):
+**Which tools work** (TensorFold 0.6, Qwen3.8-27B):
 
 | Client | API it uses | |
 |---|---|---|
@@ -334,9 +341,9 @@ TensorFold's releases: [docs/omarchy-client.md](docs/omarchy-client.md).
 with your session. `tensorfold service status local-model` says when it is
 running; loading takes a few minutes.
 
-**Update.** Upgrade with Homebrew as usual — `brew upgrade tensorfold
+**Update.** Upgrade with Homebrew as usual — `brew upgrade tensorfold@0.6
 tailscale`, or a routine `brew upgrade` of everything. Then, for each that was
-upgraded (`brew upgrade` prints a line such as `tensorfold 0.6.5 -> 0.6.6`):
+upgraded (`brew upgrade` prints a line such as `tensorfold@0.6 0.6.6 -> 0.6.7`):
 
 - **TensorFold:** restart the service right away.
 

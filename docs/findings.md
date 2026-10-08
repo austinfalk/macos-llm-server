@@ -4,7 +4,8 @@ The measurements behind the recommendations in the [guide](../README.md). Each
 section says what was measured and what it changed.
 
 **Measured on:** MacBook Pro 16" (M1 Max, 10-core CPU, 64 GB), macOS 27.0,
-with TensorFold 0.6.5 for everything about the server. Each section gives its
+with TensorFold 0.6.5 (the Python line) for everything about the server; the
+server now runs 0.6.6, whose changes are CUDA-only. Each section gives its
 dates.
 
 Items marked *(sourced)* come from the linked references and were not

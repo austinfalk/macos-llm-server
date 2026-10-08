@@ -25,7 +25,7 @@ fi
 # Decide by its files: `service status` errors when that session is absent.
 profile="$LLM_HOME/Library/Application Support/TensorFold/control/profiles/$LLM_SERVICE.json"
 if [ -f "$TF_PLIST" ] || [ -f "$profile" ]; then
-	if sudo -u "$LLM_USER" env HOME="$LLM_HOME" "$BREW_PREFIX/bin/tensorfold" service uninstall "$LLM_SERVICE" --yes >/dev/null 2>&1; then
+	if sudo -u "$LLM_USER" env HOME="$LLM_HOME" "$TF_BIN" service uninstall "$LLM_SERVICE" --yes >/dev/null 2>&1; then
 		ok "TensorFold service $LLM_SERVICE removed"
 	else
 		warn "could not remove the TensorFold service from here; it would start again at the next login."
@@ -67,7 +67,7 @@ cat <<LEFT
   models           ~/.cache/huggingface/hub    (hf cache delete, or delete the folder)
   API key          $KEY_FILE
   logs             ~/Library/Logs/TensorFold, $LLM_LOGS
-  packages         brew uninstall ashhart/tensorfold/tensorfold tailscale
+  packages         brew uninstall $TF_FORMULA tailscale
   tailnet          sudo tailscale logout
   power settings   pmset -g custom   (these are ordinary macOS settings)
   automatic login  stays off

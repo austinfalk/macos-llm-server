@@ -7,8 +7,8 @@ them), the Mac's desktop, and SSH. Written to be followed step by step, by a
 person or by a Claude Code session running in a clone of this repo on the
 Omarchy machine. Researched against Omarchy 4.0.4, Claude Code's current docs,
 Codex rust-v0.157.1, Hermes Agent 0.21.0 (as `hermes-desktop 2026.8.31-3`
-installs it) and OpenCode 1.18.34, with the server on TensorFold 0.6.5
-(October 2026).
+installs it) and OpenCode 1.18.34, with the server on TensorFold's Python line,
+0.6.5 and 0.6.6 (October 2026).
 
 **If you are Claude Code following this:** do one step at a time and run its
 check before the next. If a check fails, or a command, flag or config key does
@@ -42,7 +42,7 @@ config below:
 
 ### What works today
 
-TensorFold 0.6.5 with Qwen3.8-27B, tested from this machine on 2026-10-03:
+TensorFold 0.6 with Qwen3.8-27B, tested from this machine on 2026-10-03:
 
 | Tool | Use it for | API | Status |
 |---|---|---|---|
@@ -124,7 +124,7 @@ of hacking the requests, which this setup does not do.
 
 TensorFold releases often; each release's notes are in its
 [changelog](https://github.com/ashhart/TensorFold/blob/main/CHANGELOG.md). On
-the server: `brew upgrade tensorfold && tensorfold service restart local-model`.
+the server: `brew upgrade tensorfold@0.6 && tensorfold service restart local-model`.
 Then look for:
 
 - **For Claude Code:** the Anthropic Messages endpoint accepting
@@ -759,7 +759,7 @@ leaves 1Password.
    `<machine>.<tailnet>.ts.net`), accept the fingerprint you just checked, and
    approve the key in 1Password.
 
-**Check:** `ssh <machine> 'sw_vers -productVersion; /opt/homebrew/bin/tensorfold service status local-model'`
+**Check:** `ssh <machine> 'sw_vers -productVersion; /opt/homebrew/opt/tensorfold@0.6/bin/tensorfold service status local-model'`
 prints the macOS version and the model service's state. A command run this way
 gets no login shell, so Homebrew's tools are not on its `PATH`: interactively
 (`ssh <machine>`) `tensorfold` works; in a one-off command, use its full path.

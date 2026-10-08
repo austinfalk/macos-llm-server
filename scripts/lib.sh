@@ -35,9 +35,14 @@ fi
 LLM_HOME=$(dscl . -read "/Users/$LLM_USER" NFSHomeDirectory 2>/dev/null | sed -n 's/^NFSHomeDirectory: //p')
 LLM_UID=$(id -u "$LLM_USER" 2>/dev/null)
 KEY_FILE=$LLM_HOME/.config/tensorfold/api-keys
-# The service's interpreter, through Homebrew's version-independent opt link:
-# the default, a Cellar path, is deleted by the next `brew upgrade tensorfold`.
-TF_PYTHON=$BREW_PREFIX/opt/tensorfold/libexec/bin/python
+# TensorFold's Python line, which serves the recipes its native 1.0 engine does
+# not qualify yet (Qwen3.8-27B among them). The formula is keg-only, so the
+# scripts call it by path, through Homebrew's version-independent opt link: a
+# Cellar path is deleted by the next upgrade.
+TF_FORMULA=ashhart/tensorfold/tensorfold@0.6
+TF_PREFIX=$BREW_PREFIX/opt/tensorfold@0.6
+TF_BIN=$TF_PREFIX/bin/tensorfold
+TF_PYTHON=$TF_PREFIX/libexec/bin/python
 TF_LABEL=dev.tensorfold.$LLM_SERVICE
 TF_PLIST=$LLM_HOME/Library/LaunchAgents/$TF_LABEL.plist
 TF_LOG=$LLM_HOME/Library/Logs/TensorFold/$LLM_SERVICE/server.log

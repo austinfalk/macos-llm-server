@@ -40,7 +40,9 @@ rewriting or proxies; record it and wait for a release.
 - Root-installed files live outside the checkout (`/usr/local/etc/llm-server`,
   `/usr/local/sbin`, `/Library/...`); TensorFold's live under the user's
   `~/Library`. Nothing reads files from this repo at run time.
-- The TensorFold service's interpreter is `$(brew --prefix)/opt/tensorfold/libexec/bin/python`,
+- TensorFold comes from the tap's `tensorfold@0.6` formula (its Python line;
+  `TF_FORMULA` in `lib.sh`), called by path, `$(brew --prefix)/opt/tensorfold@0.6/bin/tensorfold`.
+  The service's interpreter is `$(brew --prefix)/opt/tensorfold@0.6/libexec/bin/python`,
   never a Cellar path: `brew upgrade` deletes the old Cellar folder.
 - Restart launchd jobs with `start_job`/`stop_job` from `lib.sh`: `launchctl
   bootout` is asynchronous and an immediate `bootstrap` fails.

@@ -40,7 +40,7 @@ else
 fi
 
 step "TensorFold"
-pass "$(sudo -u "$LLM_USER" "$BREW_PREFIX/bin/tensorfold" --version 2>/dev/null || echo "tensorfold: not installed")"
+pass "$(sudo -u "$LLM_USER" "$TF_BIN" --version 2>/dev/null || echo "tensorfold: not installed")"
 if job_loaded "gui/$LLM_UID/$TF_LABEL"; then
 	pass "service $LLM_SERVICE loaded in $LLM_USER's login session"
 elif [ "$(stat -f %Su /dev/console)" != "$LLM_USER" ]; then

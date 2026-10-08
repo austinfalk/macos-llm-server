@@ -29,9 +29,10 @@ fi
 ok "checked"
 
 step "Packages"
-# TensorFold's own tap is its documented Homebrew install; the formula builds a
-# private Python environment with the MLX versions TensorFold pins.
-for f in tailscale ashhart/tensorfold/tensorfold; do
+# TensorFold's own tap is its documented Homebrew install. tensorfold@0.6 is its
+# Python line, which serves the recommended model; the formula builds a private
+# Python environment with the MLX versions TensorFold pins.
+for f in tailscale "$TF_FORMULA"; do
 	if brew list --formula "$f" >/dev/null 2>&1; then
 		ok "$(brew list --versions "$f")"
 	else
@@ -39,6 +40,22 @@ for f in tailscale ashhart/tensorfold/tensorfold; do
 		ok "$(brew list --versions "$f") installed"
 	fi
 done
+
+# Keg-only, so not on PATH by itself: link it so `tensorfold` in a shell runs
+# this version. The scripts call it by path either way.
+if readlink "$BREW_PREFIX/bin/tensorfold" 2>/dev/null | grep -q '/tensorfold@0.6/'; then
+	ok "the tensorfold command runs $TF_FORMULA"
+elif brew list --formula ashhart/tensorfold/tensorfold >/dev/null 2>&1; then
+	warn "ashhart/tensorfold/tensorfold (TensorFold's native engine) owns the tensorfold command."
+	warn "The scripts use $TF_BIN. For the shell: brew unlink tensorfold && brew link --force $TF_FORMULA"
+elif brew link --force "$TF_FORMULA" >/dev/null 2>&1; then
+	ok "linked: the tensorfold command runs $TF_FORMULA"
+else
+	# Linking loads the tap's other formula with the same command name, which
+	# Homebrew refuses while that formula is untrusted.
+	warn "could not link $TF_FORMULA, so the tensorfold command is not on PATH (the scripts do not need it)."
+	warn "For the shell: brew trust --formula ashhart/tensorfold/tensorfold && brew link --force $TF_FORMULA"
+fi
 
 step "Hugging Face"
 # Models download from Hugging Face. Anonymous downloads work, with lower rate
