@@ -154,6 +154,74 @@ error messages), not a configuration fault:
 and Codex setups ready for a TensorFold release that accepts their requests,
 and says what to look for in its changelog.
 
+## TensorFold's native engine (1.0.12) on this Mac
+
+TensorFold's Python line is frozen at 0.6.6; client fixes now land only in its
+native 1.x engine. On 2026-10-17 the native 1.0.12 binary (the release archive,
+the same bytes as the tap's `tensorfold` formula) served the same Qwen3.8-27B
+checkpoint and DFlash2 drafter, with its stock settings (`--drafter`, `--name`,
+`--api-key-file`; context left at its 32,768 default). The 27B is qualified on
+M5 Max and M3 Ultra only, not on an M1.
+
+It loaded in 59 s (19.4 GiB wired, 8 streams of 32,768 tokens). The same three
+example requests went to each server from the Mac, at `reasoning_effort:
+medium` and 512 reply tokens, with each server's own timings:
+
+| Request | 0.6.6 read | 1.0.12 read | 0.6.6 writing | 1.0.12 writing |
+|---|---|---|---|---|
+| A question about `verify.sh`, 2,580 tokens cold | 29.5 s (87 tok/s) | 37.3 s (69 tok/s) | 30.6 tok/s | 21.9 tok/s |
+| Its follow-up, 2,560-2,575 cached | 2.4 s | 1.4 s | 28.0 tok/s | 16.9 tok/s |
+| README and three scripts, 12,072 tokens cold | 110.9 s (109 tok/s) | 283.6 s (43 tok/s) | 22.9 tok/s | 9.5 tok/s |
+
+So on an M1 Max the native 27B reads long prompts at about 40% of 0.6.6's
+speed and writes at about half, as TensorFold's README warns ("prompt
+processing trails mlx_lm for now"). Short API checks on the same server:
+
+- Keys: 401 without one on `/v1/models` and `/metrics`; `X-Api-Key` works;
+  `/health` is `{"status": "ok"}`. `/v1/models` lists the efforts xhigh,
+  medium, low and none.
+- Codex's shape works: `/v1/responses` with `include:
+  ["reasoning.encrypted_content"]` and `store: false`, and a second turn that
+  sends the first turn's output items back, both 200.
+- Messages accepts a mid-conversation system message after a user turn (the
+  Qwen template refused it on 0.6.6), and refuses one after an assistant turn
+  ("must follow a user turn"). A JSON-schema `output_config`, as in Claude
+  Code's title requests, gets 400: structured output is Nemotron and
+  Qwen3.5-2B only. Claude Code itself was not run.
+
+**Started again after the memory settled** (same day; 0.6.6 stopped, then
+wired memory steady for 60 s and no swap; the engine's saved startup timings
+moved aside so it timed itself again): the same three requests gave the same
+tokens and the same timings to 0.1 s. The first run was not a memory or
+startup artifact. At `--context 144384`, the size the clients are configured
+for, the server fits 3 streams and leaves **no prompt cache** ("prompt cache:
+0.0 GiB"), so the follow-up re-read its whole conversation: 37.9 s to its first
+token instead of 1.4 s.
+
+**Nemotron 3.5 Lightning on 1.0.12** (same day, revision `d9d758fb`, stock
+flags: 262,144-token context, 16 GiB prompt cache, loaded in 33 s). It is
+fast here: the same example requests read at 532 and 551 tok/s (the 27B on
+0.6.6: 87 and 109) and wrote at 30-44 tok/s, a follow-up started in 0.19 s,
+and Claude Code's title request (JSON schema) worked. But its longer replies
+can collapse into one repeated string, 后汉书, until the output cap:
+
+| Request (no tools, a 36-token prompt) | Result |
+|---|---|
+| ~600 words of prose, greedy, thinking off | coherent, 759 tokens; drafts 382/561 |
+| The same with `"draft": false` | the same tokens (same `sha`) |
+| A tool call to a short path, greedy | correct |
+| The same prose, thinking on, server's default sampling (temperature 1.0, top_p 0.95) | reasoning sound for ~2,300 characters, then 后汉书 repeated |
+| The same, thinking on, greedy | coherent to the 600-token cap |
+
+The same collapse came greedy, thinking off, in a tool call whose path was a
+long scratch directory, and in a real Claude Code tool call (twice, to the
+16,384-token cap). Low draft acceptance marks it in the log (10 of 587, 24 of
+18,428). Not found in TensorFold's issues. On M1 Max, macOS 27.0.1 (26A434).
+
+**Changed:** nothing; the server stays on 0.6.6. Try the native 27B again when
+a release reports faster 27B prompts on M1-M4; Nemotron when the collapse is
+fixed.
+
 ## Remote desktop: Sunshine needs the display awake
 
 Tested 2026-10-03 from the Omarchy machine (Sunshine 2026.914.233613,
