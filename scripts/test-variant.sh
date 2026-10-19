@@ -55,4 +55,9 @@ upstream SPLASH_VERSION:set SPLASH_BIN:set SPLASH_RUN_DIR:set SPLASH_ARCHIVE_SHA
 none SPLASH_VERSION:empty SPLASH_BIN:empty SPLASH_RUN_DIR:empty
 VARIANTS
 
+# A variant chosen by config.env or the environment could install a Splash that
+# refuses this Mac's GPU, so only lib.sh sets it, from the chip.
+check "SPLASH_VARIANT is set only in lib.sh, from the chip" \
+	"$(grep -n -E 'SPLASH_VARIANT(:)?=' scripts/*.sh config.env.example | grep -v -F 'scripts/lib.sh:' | grep -c .)$(grep -c 'SPLASH_VARIANT:=' scripts/lib.sh)" 00
+
 [ "$fails" -eq 0 ]
