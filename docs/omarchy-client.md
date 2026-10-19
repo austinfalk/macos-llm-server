@@ -20,13 +20,13 @@ needs it, ask the user.
 
 Throughout, `ENDPOINT` means `https://<machine>.<tailnet>.ts.net`, the server's
 address, which `tailscale status` lists once step 1 is done. The server runs
-[Splash](https://github.com/incoai/splash), through its M1/M2 port
+[Splash](https://github.com/incoai/splash), or on an M1 or M2 Mac its port
 [paperniuk/splash](https://github.com/paperniuk/splash), with Qwen3.8-27B and
 its DFlash2 draft. Every API is under `ENDPOINT/v1`: OpenAI chat completions
 and Responses, and Anthropic Messages. Splash's own client launchers
-(`splash-m1 claude` and the others) connect only to a server on the same Mac,
-so each tool is configured by hand here, with the launchers' settings where
-they set one (the port's `install/clients.py`). Four facts shape every config:
+(`splash claude` and the others) connect only to a server on the same Mac, so
+each tool is configured by hand here, with the launchers' settings where they
+set one (the port's `install/clients.py`). Four facts shape every config:
 
 - **One model ID.** Every model setting, including background and helper
   models, names `mlx-community/Qwen3.8-27B-4bit`. Splash answers any other
@@ -39,11 +39,11 @@ they set one (the port's `install/clients.py`). Four facts shape every config:
   back empty, so the configs allow 32,768 output tokens and long timeouts.
 - **The window is 262,144 tokens**, the model's native window, which
   `/v1/models` reports as `context_length`. Each client gets the whole window
-  and compacts before reaching it. Nothing has been measured end to end past
-  about 31K tokens. If a client fails near the limit, lower that client's
-  window to 144,384, a window all four have run with, recompute the limits
-  derived from it (Codex's 90%, OpenCode's input), and record it in
-  [`findings.md`](findings.md).
+  and compacts before reaching it. A `claude-local` session reached 94,953
+  tokens of context ([findings](findings.md#clients)). If a client fails near
+  the limit, lower that client's window to 144,384, a window all four have run
+  with, recompute the limits derived from it (Codex's 90%, OpenCode's input),
+  and record it in [`findings.md`](findings.md).
 
 ## Before you start
 
@@ -71,9 +71,9 @@ All four passed step 7 from this machine on 2026-10-18 with these settings,
 after working with an earlier version of them
 ([findings](findings.md#the-server-splash-for-m1m2-and-qwen38-27b)). The one
 failure was a `claude-local` turn that thought for more than 10 minutes, which
-step 3's `CLAUDE_STREAM_IDLE_TIMEOUT_MS` is for. Any other
-tool that speaks OpenAI chat completions should work the same way: base URL `ENDPOINT/v1`, the key from step 2, and the
-model ID above.
+step 3's `CLAUDE_STREAM_IDLE_TIMEOUT_MS` is for. Any other tool that speaks
+OpenAI chat completions should work the same way: base URL `ENDPOINT/v1`, the
+key from step 2, and the model ID above.
 
 ### Working well with it
 
@@ -445,8 +445,7 @@ app.
 
 Keep any keys already in the file (Omarchy's has `theme` and `autoupdate`).
 If it has an `agent` section, keep each agent's other settings and set its
-`model`. Plain
-`opencode` then uses the server.
+`model`. Plain `opencode` then uses the server.
 
 Why each, checked against OpenCode 1.18.34's config schema. OpenCode 2.0.32
 reads the same file and converts it, and `opencode debug config` shows the

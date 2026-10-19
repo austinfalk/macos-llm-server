@@ -1,39 +1,41 @@
 # Working in this repo
 
-A guide and scripts for running a private model server on an M1 or M2 Mac, with
-[Splash](https://github.com/incoai/splash)'s M1/M2 port,
-[paperniuk/splash](https://github.com/paperniuk/splash), behind `tailscale serve`.
-`README.md` is the guide, and `docs/findings.md` the measurements behind it.
-**`NEXT.md`, if present, is the state of the machine this checkout runs on and
-what is left to do — read it first.** It is local to that machine and not
-tracked.
+A guide and scripts for running a private model server on an Apple Silicon Mac
+with [Splash](https://github.com/incoai/splash), behind `tailscale serve`. An
+M3 or later runs Splash itself, and an M1 or M2 runs its port,
+[paperniuk/splash](https://github.com/paperniuk/splash). `README.md` is the
+guide, and `docs/findings.md` the measurements behind it. **`NEXT.md`, if
+present, is the state of the machine this checkout runs on and what is left to
+do. Read it first.** It is local to that machine and not tracked.
 
-**On a client machine** (not the server) — for example, the Omarchy machine
-that uses it — the task is to connect it: follow `docs/omarchy-client.md`
-step by step. The server's scripts do not run there.
+**On a client machine** (not the server), such as the Omarchy machine that
+uses it, the task is to connect it. Follow `docs/omarchy-client.md` step by
+step. The server's scripts do not run there.
 
 ## Principle
 
-Use Splash's M1/M2 port as it ships: its release installer, pinned by
-checksum; the checkpoint its release notes recommend and the draft Splash
+Use the Splash build for the chip as it ships: Splash's Homebrew formula on an
+M3 or later, or the port's release installer on an M1 or M2, pinned by
+checksum; the checkpoint the build's documentation names and the draft Splash
 pairs with it automatically; its API key; and its defaults for everything
 else. The departures are this repo's LaunchAgent, because Splash ships no
 service manager, and one setting: reasoning effort defaults to medium
 (`docs/findings.md` has why). Defer to the published measurements of Splash
-and the port rather than benchmarking. When a client does not work, find out whether Splash
-or the port documents the behaviour before changing anything here, and do not
-work around it with request rewriting or proxies; record it and wait for a
-release.
+and the port rather than benchmarking. When a client does not work, find out
+whether Splash or the port documents the behaviour before changing anything
+here, and do not work around it with request rewriting or proxies; record it
+and wait for a release.
 
 ## Layout
 
-- `scripts/` — numbered setup steps, `verify.sh`, `uninstall.sh`, and
-  `lib.sh`, which everything sources.
-- `config/` — the tailnet policy, and templates that `3-services.sh` (Splash's
-  LaunchAgent) and the hardening step (pf, sshd, battery watchdog) install,
-  with `@PLACEHOLDERS@` filled by `render()` in `lib.sh`. `config.env`
+- `scripts/` holds the numbered setup steps, `verify.sh`, `uninstall.sh`, and
+  the checks CI runs, `test-variant.sh` and `check-public.sh`. Everything
+  sources `lib.sh`, which sources `variant.sh` for each build's values.
+- `config/` holds the tailnet policy, and templates that `3-services.sh`
+  (Splash's LaunchAgent) and the hardening step (pf, sshd, battery watchdog)
+  install, with `@PLACEHOLDERS@` filled by `render()` in `lib.sh`. `config.env`
   (gitignored) overrides the defaults in `lib.sh`.
-- `docs/` — `findings.md`, the measurements and their history;
+- `docs/` holds `findings.md`, the measurements and their history;
   `omarchy-client.md`, the client guide; and `omarchy-desktop.md`, the Mac's
   desktop and SSH from the client.
 
@@ -50,13 +52,23 @@ release.
 - Root-installed files live outside the checkout (`/usr/local/etc/llm-server`,
   `/usr/local/sbin`, `/Library/...`); Splash, its LaunchAgent and its log live
   under the user's `~/Library`. Nothing reads files from this repo at run time.
-- Splash comes from the port's release installer, `install-m1.sh`, pinned by
-  `SPLASH_VERSION` and `SPLASH_INSTALLER_SHA256` in `lib.sh`; `1-install.sh`
+- Each build's pins live in `scripts/variant.sh`. On an M3 or later, Splash
+  comes from the Homebrew formula `incoai/tap/splash`, pinned by
+  `SPLASH_VERSION`, `SPLASH_ARCHIVE_SHA256` and `SPLASH_BOTTLE_SHA256`.
+  `1-install.sh` refuses a formula whose version or checksums differ, and runs
+  `brew pin splash` after installing, so `brew upgrade` does not move it. On an
+  M1 or M2, Splash comes from the port's release installer, `install-m1.sh`,
+  pinned by `SPLASH_VERSION` and `SPLASH_INSTALLER_SHA256`. `1-install.sh`
   refuses an installer whose SHA-256 differs. The installer keeps each version
   under `~/Library/Application Support/Splash-M1` and points `current` and the
-  command at the newest. Call it by path, `$(brew --prefix)/bin/splash-m1`
-  (`SPLASH_BIN`), never a version's folder. A new release is a deliberate bump
-  of both values, never a side effect of `brew upgrade`.
+  command at the newest. Call Splash by path, `SPLASH_BIN`
+  (`$(brew --prefix)/bin/splash` or `splash-m1`), never a version's folder. A
+  new release is a deliberate bump of the build's values, never a side effect
+  of `brew upgrade`.
+- Only `scripts/lib.sh` sets `SPLASH_VARIANT`, from the chip, with a plain
+  assignment that neither `config.env` nor the environment can override. A
+  build chosen by hand could install a Splash that refuses the Mac's GPU.
+  `scripts/test-variant.sh` checks both in CI.
 - Restart launchd jobs with `start_job`/`stop_job` from `lib.sh`: `launchctl
   bootout` is asynchronous and an immediate `bootstrap` fails.
 - Claude has no sudo here (`sudo -n` fails). Test what can run unprivileged;
@@ -68,5 +80,11 @@ release.
 - Record results in `docs/findings.md` with what they changed.
 - Only `docs/findings.md` names engines this server no longer runs. Everything
   else describes the current setup.
+- The repository is public, so nothing personal enters any file, commit
+  message or PR text: no usernames, real hostnames or tailnet names, the
+  machines' IP addresses, home directory paths, or email addresses other than
+  noreply and `example.com` ones. Use the placeholders, such as
+  `<machine>.<tailnet>.ts.net` and `100.64.0.0/10`. `scripts/check-public.sh`
+  checks tracked files in CI.
 - Commits are signed with the maintainer's SSH signing key through 1Password.
   If signing fails, say so and ask; do not fall back to unsigned commits.

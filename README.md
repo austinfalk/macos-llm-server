@@ -2,12 +2,17 @@
 
 **A private AI server on a Mac.**
 
-Turn an M1 or M2 Mac, desktop or laptop, into a model server that your other
-devices can use from anywhere, privately, with the model running on the Mac's
-GPU and Neural Engine. It runs [Splash](https://github.com/incoai/splash)
-through [its community port for M1 and M2](https://github.com/paperniuk/splash).
-Splash serves OpenAI- and Anthropic-compatible APIs, so agents and other tools
-can point at it.
+Turn an Apple Silicon Mac, desktop or laptop, into a model server that your
+other devices can use from anywhere, privately, with the model running on the
+Mac's GPU and Neural Engine. It runs [Splash](https://github.com/incoai/splash)
+on an M3 or later, and [its community port for M1 and
+M2](https://github.com/paperniuk/splash) on an M1 or M2. Splash serves OpenAI-
+and Anthropic-compatible APIs, so agents and other tools can point at it.
+
+The Mac needs macOS 26.4 or later, and the default model needs at least 36 GB
+of unified memory, 48 GB recommended *(sourced)*. Every measurement here is
+from an M1 Max. On an M3 or later, the scripts install Splash as its
+documentation describes, and that path has not yet run on an M3 or later here.
 
 ```
   your laptop, phone, CI ──Tailscale (WireGuard)──▶ tailscale serve :443    TLS, tailnet only
@@ -29,30 +34,30 @@ When you are done:
 
 This guide runs Splash on its defaults, apart from the LaunchAgent and the
 default reasoning effort (step 5), and defers to the published measurements of
-Splash and its M1/M2 port. What was measured on this guide's machine is in
+Splash and its M1/M2 port. What was measured on this guide's M1 Max is in
 [`docs/findings.md`](docs/findings.md).
 
 ---
 
 ## Before you start
 
-**Hardware.** A Mac with an M1 or M2 chip. Splash itself runs on M3 and newer
-only. [paperniuk/splash](https://github.com/paperniuk/splash) is an unofficial
-community port that adds Metal kernels for M1 and M2 GPUs. Its author tested it
-on an M1 Max and not on an M2 *(sourced)*. On an M3 or newer, use official
-Splash (`brew install incoai/tap/splash`) instead, because `1-install.sh`
-refuses any chip but an M1 or M2. Memory decides which models you can run.
-Splash sizes its memory and context at startup, and stops if the model does
-not fit. The model used here needs at least 36 GB of unified memory, 48 GB
-recommended *(sourced)*. This guide has measured only a 64 GB Mac.
+**Hardware.** A Mac with Apple Silicon. Splash itself runs only on an M3 or
+later *(sourced)*, and `1-install.sh` installs it there. On an M1 or M2, the
+script installs [paperniuk/splash](https://github.com/paperniuk/splash), an
+unofficial community port that adds Metal kernels for M1 and M2 GPUs. Its
+author tested it on an M1 Max and not on an M2 *(sourced)*. Memory decides
+which models you can run. Splash sizes its memory and context at startup, and
+stops if the model does not fit. The model used here needs at least 36 GB of
+unified memory, 48 GB recommended *(sourced)*.
 
 **Set expectations.** A local model is private, not fast. On an M1 Max, the
 model used here reads a new prompt at about 150-185 tokens a second and writes
 at about 23-38, slower as a conversation grows. An agent's first turn takes a
 minute or two. Follow-ups start in 1-2 s, because the server caches the
-conversation. Hosted models run far faster. Local suits code that cannot leave
-the building, batch and overnight jobs, and a private endpoint for your own
-scripts ([findings](docs/findings.md#context-is-local-worth-it-sourced)).
+conversation. Every speed and wait in this guide was measured on that M1 Max.
+Hosted models run far faster. Local suits code that cannot leave the building,
+batch and overnight jobs, and a private endpoint for your own scripts
+([findings](docs/findings.md#context-is-local-worth-it-sourced)).
 
 **You need** macOS 26.4 or later, an administrator account on the Mac,
 [Homebrew](https://brew.sh), a [Tailscale](https://tailscale.com) account,
@@ -73,8 +78,8 @@ Splash pairs each with the DFlash2 draft model trained for its family, which
 makes it write faster.
 
 The default here is **Qwen3.8-27B** in MLX 4-bit,
-`mlx-community/Qwen3.8-27B-4bit`, the checkpoint the port's release notes name.
-It scores 34 on the [Artificial Analysis Intelligence
+`mlx-community/Qwen3.8-27B-4bit`, which Splash's README lists and the port's
+release notes name. It scores 34 on the [Artificial Analysis Intelligence
 Index](https://artificialanalysis.ai/) v4.3.2, which changes over time, against
 18 for Qwen3.6-35B-A3B *(sourced)*. The 35B-A3B is a mixture of experts with 3B
 parameters active per token, so it writes faster, at a large cost in quality
@@ -115,19 +120,30 @@ As your normal user:
 sh scripts/1-install.sh
 ```
 
-The script checks for an M1 or M2 and macOS 26.4 or later, installs
-`tailscale` from Homebrew and Splash's M1/M2 port from its release, and keeps
-the model cache out of Time Machine. If the Tailscale app is installed, the
-script warns you. This setup runs Homebrew's `tailscaled` instead, and running
-both has not been tested.
+The script checks for Apple Silicon and macOS 26.4 or later, installs
+`tailscale` from Homebrew and the Splash build for this chip, and keeps the
+model cache out of Time Machine. If the Tailscale app is installed, the script
+warns you. This setup runs Homebrew's `tailscaled` instead, and running both
+has not been tested.
 
-**Which Splash.** `1-install.sh` downloads the port's release installer,
-`install-m1.sh`, for the pinned version (`SPLASH_VERSION` in `scripts/lib.sh`),
-and runs it only if its SHA-256 is `SPLASH_INSTALLER_SHA256`. The installer
-checks the release archive's SHA-256, installs the `splash-m1` command (step 9
-lists where things go), and leaves an official `splash` alone. Because of the
-pin, `brew upgrade` never changes Splash. A new release is a step you take
-(step 9).
+**Which Splash.** `scripts/lib.sh` reads the chip and picks the build, and
+`scripts/variant.sh` pins each build's version and checksums:
+
+- **M3 and later, Splash itself.** `1-install.sh` adds the Homebrew tap
+  `incoai/tap` and reads the formula's version and the checksums of its
+  tarball and bottle. It refuses the formula unless they are `SPLASH_VERSION`,
+  `SPLASH_ARCHIVE_SHA256` and `SPLASH_BOTTLE_SHA256`. It installs
+  `incoai/tap/splash` with Homebrew's auto-update off, so the tap cannot change
+  after the check, then runs `brew pin splash`.
+- **M1 and M2, the port.** `1-install.sh` downloads the port's release
+  installer, `install-m1.sh`, for `SPLASH_VERSION`, and runs it only if its
+  SHA-256 is `SPLASH_INSTALLER_SHA256`. The installer checks the release
+  archive's SHA-256, installs the `splash-m1` command (step 9 lists where
+  things go), and leaves an official `splash` alone.
+
+Either way, the script then checks that `splash --version` or
+`splash-m1 --version` prints the pinned version. Because of the pins,
+`brew upgrade` never changes Splash. A new release is a step you take (step 9).
 
 **Optional: a Hugging Face token.** Models download from Hugging Face, which
 rate-limits anonymous downloads. Create a **read** token (Settings → Access
@@ -182,7 +198,7 @@ clients use is `mlx-community/Qwen3.8-27B-4bit`. The key is the one line of
 your login session, where macOS gives it the GPU and the Neural Engine. It
 starts Splash at login, stops it at logout, and starts it again if it fails.
 Splash's output goes to `~/Library/Logs/llm-server/splash.log`. The LaunchAgent
-runs `splash-m1 serve` with three flags
+runs `splash serve`, or `splash-m1 serve` on an M1 or M2, with three flags
 ([findings](docs/findings.md#the-server-splash-for-m1m2-and-qwen38-27b) has
 the reasons):
 
@@ -202,7 +218,7 @@ newest commit on Hugging Face. This setup does not pin one with `--revision`.
 
 **The key reaches Splash in its environment.** The LaunchAgent runs
 `/bin/sh -c`, which reads the key file into `SPLASH_API_KEY` and `exec`s
-`splash-m1 serve`, so the key is never on a command line or in the plist.
+Splash, so the key is never on a command line or in the plist.
 Splash reads it once, when it starts. It checks `Authorization: Bearer` or
 `x-api-key` on every route except `/health`, `/ready` and the chat page.
 `/health` says only `{"status":"ok"}`, and `/ready` answers 200 once the model
@@ -281,7 +297,8 @@ sudo sh scripts/verify.sh
 ```
 
 The script checks the tailnet (and that Funnel is off), that Splash's
-LaunchAgent is loaded in your session and Splash runs as you, not as root, that
+LaunchAgent is loaded in your session, that Splash is the pinned version (on an
+M3 or later, also pinned in Homebrew) and runs as you, not as root, that
 nothing listens beyond loopback, the API key with both headers (and wrong,
 empty and missing keys), what `/health` reveals, the model ID clients see, and
 the hardening. It exits non-zero if anything fails.
@@ -325,10 +342,11 @@ Hermes Agent and OpenCode (chat completions) all worked from another machine on
 settings ([findings](docs/findings.md#the-server-splash-for-m1m2-and-qwen38-27b)).
 Under Claude Code's large prompt, the model once explored the Mac with tool
 calls instead of following a trivial instruction, until it was stopped.
-Splash's own launchers, `splash-m1 claude`, `codex`, `opencode`, `hermes` and
-`pi`, connect only to a server on the same Mac. From another machine, configure
-each tool by hand. [docs/omarchy-client.md](docs/omarchy-client.md) has
-step-by-step configurations for all four, with checks.
+Splash's own launchers, `splash claude`, `codex`, `opencode`, `hermes` and
+`pi`, connect only to a server on the same Mac, and so do the port's
+`splash-m1` ones. From another machine, configure each tool by hand.
+[docs/omarchy-client.md](docs/omarchy-client.md) has step-by-step
+configurations for all four, with checks.
 
 ---
 
@@ -342,7 +360,7 @@ step-by-step configurations for all four, with checks.
 | Job | `~/Library/LaunchAgents/com.llmserver.splash.plist`, rendered from `config/com.llmserver.splash.plist`. Change it by re-running `3-services.sh` |
 | Log | `~/Library/Logs/llm-server/splash.log`, Splash's output, which nothing rotates |
 | API key | `~/.config/llm-server/api-key` |
-| Splash | `~/Library/Application Support/Splash-M1/<version>`, with `current` pointing at the newest. The command is `$(brew --prefix)/bin/splash-m1` |
+| Splash | On an M3 or later, Homebrew's `$(brew --prefix)/opt/splash`, and the command `$(brew --prefix)/bin/splash`. On an M1 or M2, `~/Library/Application Support/Splash-M1/<version>`, with `current` pointing at the newest, and the command `$(brew --prefix)/bin/splash-m1` |
 | Splash's data | `~/Library/Application Support/Splash`: `models/` (links into the Hugging Face cache), `runtime/`, and `thinking.key` |
 | Models | `~/.cache/huggingface/hub`: the model, 15 GB, and its draft, 3.6 GB |
 | Prompt cache | Temporary files in `$TMPDIR`, up to 32 GiB, freed when Splash exits |
@@ -353,32 +371,51 @@ step-by-step configurations for all four, with checks.
 with your session, and the status command above prints 200 a minute or two
 later.
 
-**Update Splash.** A new release is a change to this repository's pin in
-`scripts/lib.sh`. Watch [the port's
-releases](https://github.com/paperniuk/splash/releases), and read each one's
-notes, especially for client support (step 8). To move to one, download its
-`install-m1.sh`, read it, and take its SHA-256:
+**Update Splash.** A new release means new pins in `scripts/variant.sh`. Read
+its notes first, especially for client support (step 8).
+
+On an M3 or later, watch [Splash's
+releases](https://github.com/incoai/splash/releases). They list the checksums
+of the tarball and the bottle in `SHA256SUMS`:
+
+```sh
+curl -fsSL https://github.com/incoai/splash/releases/download/<version>/SHA256SUMS
+```
+
+In the `upstream` block, set `SPLASH_VERSION` to the release's tag,
+`SPLASH_ARCHIVE_SHA256` to the `.tar.gz` line's checksum, and
+`SPLASH_BOTTLE_SHA256` to the `.bottle.tar.gz` line's. Then run:
+
+```sh
+brew update
+brew unpin splash
+sh scripts/1-install.sh
+sh scripts/3-services.sh
+```
+
+`brew update` fetches the tap's new formula, and `brew unpin` lets Homebrew
+upgrade Splash. `1-install.sh` refuses the formula unless it matches the pins,
+then upgrades Splash and pins it again. If it refuses, it installs nothing, so
+run `brew pin splash` and try again once the tap matches the release.
+
+On an M1 or M2, watch [the port's
+releases](https://github.com/paperniuk/splash/releases). To move to one,
+download its `install-m1.sh`, read it, and take its SHA-256:
 
 ```sh
 curl -fsSLO https://github.com/paperniuk/splash/releases/download/<version>/install-m1.sh
 shasum -a 256 install-m1.sh
 ```
 
-Set `SPLASH_VERSION` to the release's tag and `SPLASH_INSTALLER_SHA256` to that
-SHA-256 in `scripts/lib.sh`, then run:
+In the `port` block, set `SPLASH_VERSION` to the release's tag and
+`SPLASH_INSTALLER_SHA256` to that SHA-256. Then run `sh scripts/1-install.sh`
+and `sh scripts/3-services.sh`. `1-install.sh` installs the release beside the
+old one and points `splash-m1` at it. Older versions stay under
+`~/Library/Application Support/Splash-M1` until you delete them.
 
-```sh
-sh scripts/1-install.sh
-sh scripts/3-services.sh
-```
-
-`1-install.sh` installs the release beside the old one and points `splash-m1`
-at it. The running server keeps the old version until it restarts. The
-LaunchAgent names the version in a comment, so a new pin changes the file that
-`3-services.sh` renders. The script then restarts the server, waits for the
-model, and checks the endpoint. `splash-m1 --version` prints the installed
-version. Older versions stay under `~/Library/Application Support/Splash-M1`
-until you delete them. Clients need no change.
+On either build, the LaunchAgent names the version in a comment, so with a new
+pin `3-services.sh` restarts the server onto it, waits for the model, and
+checks the endpoint. Clients need no change.
 
 **Update Tailscale** with Homebrew, `brew upgrade tailscale` or a routine
 `brew upgrade`, then restart it with `sudo brew services restart tailscale`.
