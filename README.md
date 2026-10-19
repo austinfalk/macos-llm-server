@@ -2,50 +2,60 @@
 
 **A private AI server on a Mac.**
 
-Turn an Apple Silicon Mac — desktop or laptop — into a model server that your
-other devices can use from anywhere, privately, with the model running on the
-Mac's GPU. It runs [TensorFold](https://github.com/ashhart/TensorFold), which
-serves OpenAI- and Anthropic-compatible APIs, so agents and other tools can
-point at it.
+Turn an M1 or M2 Mac, desktop or laptop, into a model server that your other
+devices can use from anywhere, privately, with the model running on the Mac's
+GPU and Neural Engine. It runs [Splash](https://github.com/incoai/splash)
+through [its community port for M1 and M2](https://github.com/paperniuk/splash).
+Splash serves OpenAI- and Anthropic-compatible APIs, so agents and other tools
+can point at it.
 
 ```
   your laptop, phone, CI ──Tailscale (WireGuard)──▶ tailscale serve :443    TLS, tailnet only
                                                         │
                                                         ▼
-                                                    TensorFold 127.0.0.1:8080   checks the API key,
-                                                                                runs the model on the GPU
+                                                    Splash 127.0.0.1:8080   checks the API key,
+                                                                            runs the model on the GPU
 ```
 
 When you are done:
 
-- The model server runs **as a TensorFold service in your login session**,
-  set up exactly as TensorFold documents it. After a restart, you log in once —
-  over Screen Sharing, from anywhere on your tailnet — and it starts.
+- The model server runs **in your login session**, as a LaunchAgent this
+  repository installs, because Splash ships no service manager. After a
+  restart, you log in once, over Screen Sharing from anywhere on your tailnet,
+  and it starts.
 - It is reachable **only over your tailnet**, and **only with an API key**.
   Nothing listens on the local network.
 - One command, `scripts/verify.sh`, checks all of it.
 
-This guide takes TensorFold's defaults and recipes as they ship, and defers to
-TensorFold's own published measurements. What was measured on this guide's
-machine is in [`docs/findings.md`](docs/findings.md).
+This guide takes Splash's defaults as they ship, and defers to the published
+measurements of Splash and of its M1/M2 port. What was measured on this
+guide's machine is in [`docs/findings.md`](docs/findings.md).
 
 ---
 
 ## Before you start
 
-**Hardware.** An Apple Silicon Mac. Memory decides which models you can run:
-TensorFold gives itself 70% of RAM by default and checks at startup that the
-model fits. The model used here needs a 64 GB Mac.
+**Hardware.** A Mac with an M1 or M2 chip. Splash itself runs on M3 and newer
+only. [paperniuk/splash](https://github.com/paperniuk/splash) is an unofficial
+community port that adds Metal kernels for M1 and M2 GPUs; its author tested it
+on an M1 Max and not on an M2 *(sourced)*. On an M3 or newer, use official
+Splash instead (`brew install incoai/tap/splash`): `1-install.sh` refuses any
+chip but an M1 or M2. Memory decides which models you can run. Splash sizes its
+memory and context at startup, and stops if the model does not fit. The model
+used here needs at least 36 GB of unified memory, 48 GB recommended
+*(sourced)*; this guide has measured only a 64 GB Mac.
 
 **Set expectations.** A local model is private, not fast. On an M1 Max, the
-model used here reads a prompt at about 100 tokens a second and writes at
-15-20; an agent's first turn takes 1½-2½ minutes, and later turns are fast
-because the server keeps the conversation cached. Hosted models run far faster,
-for a few dollars a month. Local is the right tool for code that cannot leave
-the building, batch and overnight jobs, and a private endpoint for your own
-scripts — see [findings](docs/findings.md#context-is-local-worth-it-sourced).
+model used here reads a new prompt at 150-185 tokens a second and writes at
+23-38, slower as a conversation grows. An agent's first turn takes one to two
+minutes: Claude Code's first prompt, 21,200 tokens, took 114.5 s. Later turns
+start in 1-2 s, because the server keeps the conversation cached. Hosted models
+run far faster, for a few dollars a month. Local is the right tool for code
+that cannot leave the building, batch and overnight jobs, and a private
+endpoint for your own scripts. See
+[findings](docs/findings.md#context-is-local-worth-it-sourced).
 
-**You need** macOS 14 or later, an administrator account on the Mac, [Homebrew](https://brew.sh),
+**You need** macOS 26.4 or later, an administrator account on the Mac, [Homebrew](https://brew.sh),
 a [Tailscale](https://tailscale.com) account, about an hour, and room for the
 model download (about 20 GB).
 
@@ -57,48 +67,29 @@ working default, and the file explains each one.
 
 ## 1. Choose a model
 
-Pick one of [TensorFold's recipes](https://github.com/ashhart/TensorFold/blob/v0.6.6/docs/recipes/README.md):
-each names a checkpoint, and often a draft model that makes it write faster.
-`tensorfold models` lists them, and `tensorfold info MODEL` checks one without
-downloading it.
+Splash serves two model families, Qwen3.8-27B and Qwen3.6-35B-A3B, in several
+quantizations: MLX checkpoints of 2 to 8 bits, Unsloth's GGUF variants of 1 to
+8 bits, NVFP4, and Prism ML's 2-bit Ternary Bonsai 2 (7.2 GB) *(sourced)*. For
+each, it picks the DFlash2 draft model trained for that family, which makes it
+write faster, by itself.
 
-The default here is **Qwen3.8-27B** (`TensorFold/Qwen3.8-27B-MLX-4bit`, with
-the `z-lab/Qwen3.8-27B-DFlash2` drafter): of the recipes that fit 64 GB, it
-scores highest on independent benchmarks. It is a dense model, so it reads
-prompts slowly on older chips; a mixture-of-experts recipe (Qwen3.6-35B-A3B,
-Gemma 4, Nemotron) reads them several times faster at a large cost in quality.
+The default here is **Qwen3.8-27B** in MLX 4-bit,
+`mlx-community/Qwen3.8-27B-4bit`, the checkpoint the port's release notes name.
+Its weight files are byte for byte the ones this server ran under TensorFold
+([findings](docs/findings.md#the-server-splash-for-m1m2-and-qwen38-27b)). It
+scores 34 on the [Artificial Analysis Intelligence
+Index](https://artificialanalysis.ai/) v4.3.2, which changes over time, against
+18 for Qwen3.6-35B-A3B *(sourced)*. The 35B-A3B is a mixture of experts with 3B
+parameters active per token, so it writes faster: the port measured it at
+127 tok/s on an M1 Max, and the 27B at 61.5 on a code prompt *(sourced)*. It
+costs a large drop in quality.
 
-**TensorFold's recipes** (October 2026). Index: [Artificial Analysis
-Intelligence Index](https://artificialanalysis.ai/) v4.3.2, which changes over
-time:
-
-| Model | Checkpoint | Type | Mac memory | Index | Claude Code |
-|---|---|---|---|---|---|
-| GLM-5.3-Flash | `TensorFold/GLM-5.3-Flash-MLX-4bit-MTP` | mixture of experts | 256 GB (~151 GiB resident) | 42 | accepted |
-| Qwen3.8 Flash Next | `TensorFold/Qwen3.8-Flash-Next-MLX-4bit-MTP` | mixture of experts | 128 GB (~76 GiB resident) | 40 | refused |
-| **Qwen3.8-27B** (default) | `TensorFold/Qwen3.8-27B-MLX-4bit` + `z-lab/Qwen3.8-27B-DFlash2` | dense | 64 GB (~16 GiB weights, 144K context) | 34 | refused |
-| DeepSeek-V4-Flash | `mlx-community/DeepSeek-V4-Flash-4bit` | mixture of experts | 256 GB (~151 GiB resident) | 34 | accepted |
-| Ternary Bonsai 2 27B | `prism-ml/Ternary-Bonsai-2-27B-mlx-2bit` | dense, 2-bit (the 27B compressed) | 32 GB class (~14 GiB on M1-M4) | not rated (Prism: 98% of the 27B) | refused |
-| Qwen3.6-35B-A3B | `TensorFold/Qwen3.6-35B-A3B-MLX-4bit-MTP` | mixture of experts, 3B active | 64 GB (~19 GiB weights, 262K context) | 18 | refused |
-| Gemma 4 26B-A4B | `mlx-community/gemma-4-26b-a4b-it-4bit` | mixture of experts, 4B active | 64 GB (measured on one by TensorFold) | 17 (estimated) | accepted |
-| Nemotron 3.5 Lightning | `TensorFold/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-MLX-4bit` | mixture of experts, ~3.6B active | 64 GB (262K context) | 13 | accepted |
-
-"Claude Code" is TensorFold's own check of the model's chat template, run on
-each one: whether it accepts the mid-conversation system messages Claude Code
-sends (step 8). Accepted is necessary, not proven sufficient: Claude Code was
-not run against those models here. Mixture-of-experts models do several times
-less work per token than dense ones, so they run much faster on the same Mac:
-on an M1 Max, the 35B-A3B's one-token step measured 14.5 ms against the 27B's
-64 ms. Memory
-figures are from TensorFold's recipes and this setup's startup logs;
-[findings](docs/findings.md#the-server-tensorfold-and-qwen38-27b) has
-the reasoning behind the default.
-
-**Check your clients before you choose.** A model's chat template decides
-which clients work: Claude Code needs one that accepts mid-conversation system
-messages, which the Qwen templates do not. See step 8.
-
-Set your choice as `LLM_MODEL` and `LLM_DRAFTER` in `config.env`.
+To serve another, set `LLM_MODEL` in `config.env` to what Splash's `--model`
+takes: an MLX repository, such as `mlx-community/Qwen3.6-35B-A3B-4bit`, or a
+GGUF repository and variant, `OWNER/REPO:VARIANT`, such as
+`unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M`. [Splash's model
+list](https://github.com/incoai/splash#models) links the variants. Smaller ones
+fit Macs with less memory; none was measured here.
 
 ---
 
@@ -128,18 +119,21 @@ As your normal user:
 sh scripts/1-install.sh
 ```
 
-Installs `tailscale` from Homebrew and TensorFold from [its own Homebrew tap](https://github.com/ashhart/homebrew-tensorfold),
-and keeps the model cache out of Time Machine.
+Checks for an M1 or M2 and macOS 26.4 or later, installs `tailscale` from
+Homebrew and Splash's M1/M2 port from its release, and keeps the model cache
+out of Time Machine.
 
-**Which TensorFold.** The tap has two formulas. `tensorfold@0.6` is TensorFold's
-Python line, 0.6.6: it serves every recipe above and has the `tensorfold
-service` manager this setup uses. `tensorfold` is its native 1.0 engine, which
-so far qualifies Nemotron 3.5 Lightning only on M1-M4 Macs, reuses no prompts
-for it between turns, and ships no service manager. This guide uses
-`tensorfold@0.6` and will move when the native engine serves the recommended
-model. The formula is keg-only; the script links its `tensorfold` command. If the Tailscale app is
-installed, the script warns you: this setup runs Homebrew's `tailscaled`
-instead, and running both has not been tested.
+**Which Splash.** The port publishes each release as an archive and an
+installer, `install-m1.sh`, which checks the archive's SHA-256. `1-install.sh`
+downloads the installer of the release pinned in `scripts/lib.sh`
+(`SPLASH_VERSION`, now 1.3.2-m1.1), and runs it only if its SHA-256 is
+`SPLASH_INSTALLER_SHA256`. The installer unpacks the release under
+`~/Library/Application Support/Splash-M1/<version>`, points `current` at it,
+and writes the `splash-m1` command into Homebrew's `bin`. It leaves an official
+`splash` alone. Because of the pin, `brew upgrade` never changes Splash; a new
+release is a step you take (step 9). If the Tailscale app is installed, the
+script warns you: this setup runs Homebrew's `tailscaled` instead, and running
+both has not been tested.
 
 **Optional: a Hugging Face token.** Models download from Hugging Face, which
 rate-limits anonymous downloads. Create a **read** token (Settings → Access
@@ -175,31 +169,62 @@ As yourself, not sudo:
 sh scripts/3-services.sh
 ```
 
-It generates an API key, downloads the model, installs it as a TensorFold
-service named `local-model` — TensorFold's defaults for everything else — and
-publishes it on your tailnet. Then it **checks the endpoint**: a request with
-the key must get 200, one without must get 401. The first run downloads about
-20 GB, and loading the model takes a few minutes after that. It is safe to
-re-run at any time.
+It generates an API key, installs a LaunchAgent that runs Splash, waits for the
+model, and publishes it on your tailnet. Then it **checks the endpoint**: a
+request with the key must get 200, one without must get 401. The first start
+downloads the model and its draft, about 20 GB, prepares the weights, and times
+this Mac's Neural Engine against its GPU, which can take half an hour; the
+script waits up to an hour. Later starts take a minute or two. It is safe to
+re-run at any time: it restarts the server only when its settings change.
 
 Your endpoint is `https://<machine>.<tailnet>.ts.net/v1`, and the model ID
-clients use is `local-model`. The key is the `clients:` line of
-`~/.config/tensorfold/api-keys`.
+clients use is `local-model`. The key is the one line of
+`~/.config/llm-server/api-key`.
 
-**Why it is built this way**, briefly:
+**How it runs**, briefly:
 
-- **TensorFold's own service.** `tensorfold service` installs a LaunchAgent in
-  your login session, which starts at login and stops at logout; it refuses
-  root. The one setting changed from its defaults is the interpreter path:
-  the default points into Homebrew's versioned folder, which the next
-  upgrade deletes, so the script uses Homebrew's stable `opt` link instead.
-- **The key is TensorFold's.** It checks `Authorization: Bearer` and
-  `x-api-key` itself, on every route except `/health`, which then says only
-  `ok`. Its HTTP API has no model management, so the key opens the model and
-  nothing else. Models are downloaded from the command line, on the Mac.
-- **TensorFold listens only on 127.0.0.1.** `tailscale serve` is the only way
-  in, and it adds TLS and limits it to your tailnet; TensorFold's docs ask for
-  a proxy in front of anything beyond loopback.
+- **A LaunchAgent of this repository's.** Splash ships no service manager:
+  `splash serve` runs in the foreground until you stop it. So `3-services.sh`
+  fills in `config/com.llmserver.splash.plist` and installs it as
+  `~/Library/LaunchAgents/com.llmserver.splash.plist`, in your login session,
+  where macOS gives Splash the GPU and the Neural Engine. launchd starts it at
+  login, stops it at logout, and starts it again if it fails. Its output goes
+  to `~/Library/Logs/llm-server/splash.log`, which nothing rotates.
+- **Five flags.** The LaunchAgent runs `splash-m1 serve` with:
+  - `--model mlx-community/Qwen3.8-27B-4bit` (`LLM_MODEL`), the model. Splash
+    pairs it with its DFlash2 draft, `incoai/Qwen3.8-27B-DFlash2`, by itself.
+  - `--port 8080` (`LLM_PORT`), the loopback port `tailscale serve` forwards
+    to. Splash's own default is 8000.
+  - `--served-model-name local-model` (`LLM_SERVICE`), so clients ask for
+    `local-model` whatever `LLM_MODEL` is.
+  - `--announce-served-name`, so responses and `/v1/models` report
+    `local-model` too, not the repository ID, which some clients reject
+    *(sourced)*.
+  - `--allowed-host <machine>.<tailnet>.ts.net`, the name `tailscale serve`
+    passes on. Splash answers 403 to a Host name it was not started with, to
+    keep out web pages that point a DNS name at the Mac. With this flag,
+    requests through the tailnet get in; the server has not been run without
+    it. The script reads the name from Tailscale.
+- **Everything else is Splash's default.** On this Mac that means a context of
+  262,144 tokens, the model's native window; an INT8 KV cache; Neural Engine
+  prefill; an SSD prompt cache of up to 32 GiB in `$TMPDIR`, gone when the
+  engine exits; the weights released after 10 idle minutes and restored by the
+  next request, which then waits about 6 s more; the template's reasoning
+  effort, `xhigh`, and Qwen's sampling (temperature 1.0, top_p 0.95, top_k 20)
+  for requests that set none; up to 32 requests admitted at once; the chat page
+  at `/`; and the Mac kept awake while requests run. Each start asks Hugging
+  Face for the model's newest commit, in one request of at most 5 s, and
+  follows it. `--revision <commit>` would pin it; this setup does not.
+- **The key reaches Splash in its environment.** The LaunchAgent runs
+  `/bin/sh -c`, which reads the key file into `SPLASH_API_KEY` and `exec`s
+  `splash-m1 serve`, so the key is never on a command line or in the plist.
+  Splash checks `Authorization: Bearer` or `x-api-key` on every route except
+  `/health`, `/ready` and the chat page. `/health` says only
+  `{"status":"ok"}`, and `/ready` answers 200 once the model is ready. The chat
+  page loads without the key, sends nothing until you enter it, and does not
+  keep it *(sourced)*. Splash reads the key once, when it starts.
+- **Splash listens only on 127.0.0.1**, its default. `tailscale serve` is the
+  only way in, and it adds TLS and limits it to your tailnet.
 - **The key guards the network, not the machine.** Anything running on the Mac
   can read your key file as you.
 
@@ -271,8 +296,8 @@ Logged in on the Mac:
 sudo sh scripts/verify.sh
 ```
 
-Checks the tailnet (and that Funnel is off), that the TensorFold service is
-running in your session, not as root, and will survive an upgrade, that nothing
+Checks the tailnet (and that Funnel is off), that Splash's LaunchAgent is
+loaded in your session and Splash runs as you, not as root, that nothing
 listens beyond loopback, the API key with both headers (and wrong, empty and
 missing keys), what `/health` reveals, the model ID clients see, and the
 hardening. It exits non-zero if anything fails.
@@ -286,10 +311,9 @@ hardening. It exits non-zero if anything fails.
 1. **Join the tailnet** with the Tailscale login your policy names (step 2).
    Another login, or a device shared in from another tailnet, gets nothing
    until you add it to the policy.
-2. **Copy the key** — the part after `clients: ` in
-   `~/.config/tensorfold/api-keys` on the server — through a password manager,
-   or over SSH on the tailnet. Keep it where only you can read it, not in shell
-   history or a repository.
+2. **Copy the key**, the one line of `~/.config/llm-server/api-key` on the
+   server, through a password manager, or over SSH on the tailnet. Keep it
+   where only you can read it, not in shell history or a repository.
 3. **Check it:**
 
    With the key saved, alone, in a file only you can read (here
@@ -301,27 +325,36 @@ hardening. It exits non-zero if anything fails.
      | curl -sf -K - https://<machine>.<tailnet>.ts.net/v1/models
    ```
 
-   `"id": "local-model"` means the tailnet, TLS, the key and TensorFold all work.
+   `"id": "local-model"` means the tailnet, TLS, the key and Splash all work.
 
-Base URL `https://<machine>.<tailnet>.ts.net/v1`, model `local-model`, API key
-as above. TensorFold applies the model's own sampling settings when a client
-sends none, and thinks before answering: allow 16K+ output tokens, or a reply
-that runs out while thinking comes back empty. **Tell clients the context
-window** TensorFold reports at startup — 144,384 tokens for the 27B here
-(`tensorfold service logs local-model`) — so they compact before reaching it.
+Base URL `https://<machine>.<tailnet>.ts.net/v1` (Anthropic clients take it
+without `/v1`), model `local-model`, API key as above. Splash applies Qwen's
+sampling settings when a client sends none, and the model thinks before
+answering: allow 16K+ output tokens, or a reply that runs out while thinking
+comes back empty. **Tell clients the context window**, 262,144 tokens here, or
+less, so they compact before reaching it. `/v1/models` reports it as
+`context_length`.
 
-**Which tools work** (TensorFold 0.6, Qwen3.8-27B):
+**Which tools work** (Splash 1.3.2-m1.1, Qwen3.8-27B). TensorFold 0.6.6 refused
+Claude Code's and Codex's requests, and Splash accepts them. Hermes and
+OpenCode use chat completions, which worked with TensorFold and is the endpoint
+the speed comparison measured on Splash. What was checked, on the Mac
+([findings](docs/findings.md#the-server-splash-for-m1m2-and-qwen38-27b)):
 
-| Client | API it uses | |
+| Client | API it uses | Checked |
 |---|---|---|
-| Hermes Agent, OpenCode, and other OpenAI chat-completions clients | `/v1/chat/completions` | **work** |
-| Claude Code | Anthropic Messages | refused: needs a model whose template accepts mid-conversation system messages (Gemma 4, Nemotron, GLM-5.3, DeepSeek-V4; step 1) |
-| Codex | Responses | refused: it always asks for encrypted reasoning, which TensorFold does not do |
+| Claude Code | Anthropic Messages | Its request shapes: a system message in mid-conversation, and a JSON-schema title request. Claude Code 2.x itself, through `splash-m1 claude` on the Mac and from another machine with the client guide's setup: answered, with tool calls and their results passed correctly |
+| Codex | Responses | Its request shapes: `include: ["reasoning.encrypted_content"]` with `store: false`, and a second turn that sends the output back. Codex itself, from another machine: worked over six turns |
+| Hermes Agent, OpenCode, and other OpenAI chat-completions clients | `/v1/chat/completions` | The endpoint, in the speed comparison. Hermes and OpenCode from another machine: worked |
 
-Both refusals are documented TensorFold behaviour, not configuration
-([findings](docs/findings.md#the-server-tensorfold-and-qwen38-27b)).
-Step-by-step configurations for all four, with checks, and what to watch for in
-TensorFold's releases: [docs/omarchy-client.md](docs/omarchy-client.md).
+Under Claude
+Code's large prompt the model can drift from a trivial instruction: on a first
+attempt it explored the Mac with tool calls instead of answering, until it was
+stopped. Splash's own launchers, `splash-m1 claude`, `codex`, `opencode`,
+`hermes` and `pi`, connect only to a server on the same Mac. From another
+machine, configure each tool by hand:
+[docs/omarchy-client.md](docs/omarchy-client.md) has step-by-step
+configurations for all four, with checks.
 
 ---
 
@@ -329,39 +362,51 @@ TensorFold's releases: [docs/omarchy-client.md](docs/omarchy-client.md).
 
 | | |
 |---|---|
-| Service | `tensorfold service status\|logs\|restart\|stop\|start local-model` |
-| Settings | `~/Library/Application Support/TensorFold/control/profiles/local-model.json` (TensorFold's; change them by re-running `3-services.sh`) |
-| Job | `~/Library/LaunchAgents/dev.tensorfold.local-model.plist` |
-| Log | `~/Library/Logs/TensorFold/local-model/server.log` (rotated by TensorFold at 8 MiB, four older files kept) |
-| API key | `~/.config/tensorfold/api-keys` |
-| Models | `~/.cache/huggingface/hub` |
-| Dashboard | `tensorfold tui` |
+| Restart | `launchctl kickstart -k gui/$(id -u)/com.llmserver.splash` |
+| Stop | `launchctl bootout gui/$(id -u)/com.llmserver.splash`; it starts again at your next login, or when you re-run `3-services.sh` |
+| Status | `curl -s -o /dev/null -w '%{http_code}\n' 127.0.0.1:8080/ready` prints 200 once the model is ready; `grep -E 'Ready\|Done' ~/Library/Logs/llm-server/splash.log \| tail` shows when it became ready and the last requests |
+| Job | `~/Library/LaunchAgents/com.llmserver.splash.plist` (from `config/com.llmserver.splash.plist`; change it by re-running `3-services.sh`) |
+| Log | `~/Library/Logs/llm-server/splash.log` (Splash's output; nothing rotates it) |
+| API key | `~/.config/llm-server/api-key` |
+| Splash | `~/Library/Application Support/Splash-M1/<version>`, with `current` pointing at the newest; the command is `$(brew --prefix)/bin/splash-m1` |
+| Splash's data | `~/Library/Application Support/Splash`: `models/` (links into the Hugging Face cache), `runtime/`, and `thinking.key` |
+| Models | `~/.cache/huggingface/hub`: the model, 15 GB, and its draft, 3.6 GB |
+| Prompt cache | Temporary files in `$TMPDIR`, up to 32 GiB, freed when Splash exits |
+| Crash traces | `~/Library/Logs/Splash/crash`, only with `SPLASH_CRASH_TRACE=1` |
+| Chat page | `https://<machine>.<tailnet>.ts.net/`, with the key |
 
-**After a restart**, connect with Screen Sharing and log in: the service starts
-with your session. `tensorfold service status local-model` says when it is
-running; loading takes a few minutes.
+**After a restart**, connect with Screen Sharing and log in: the server starts
+with your session. The status command above prints 200 when it is ready, a
+minute or two later.
 
-**Update.** Upgrade with Homebrew as usual — `brew upgrade tensorfold@0.6
-tailscale`, or a routine `brew upgrade` of everything. Then, for each that was
-upgraded (`brew upgrade` prints a line such as `tensorfold@0.6 0.6.6 -> 0.6.7`):
+**Update Splash.** The release is pinned in `scripts/lib.sh`, so `brew upgrade`
+never changes it, and a new release is a change to this repository. Watch [the
+port's releases](https://github.com/paperniuk/splash/releases), and read each
+one's notes, especially for client support (step 8). To move to one, read its
+`install-m1.sh` and take its SHA-256:
 
-- **TensorFold:** restart the service right away.
+```sh
+curl -fsSLO https://github.com/paperniuk/splash/releases/download/<version>/install-m1.sh
+shasum -a 256 install-m1.sh
+```
 
-  ```sh
-  tensorfold service restart local-model
-  ```
+Set `SPLASH_VERSION` to the release's tag and `SPLASH_INSTALLER_SHA256` to that
+SHA-256 in `scripts/lib.sh`, then:
 
-  The service survives the upgrade — it starts through Homebrew's stable `opt`
-  link, not a version's folder — but the running server keeps using the old
-  version's files until it restarts, and `brew upgrade` itself deletes them:
-  Homebrew removes an upgraded formula's old version at once (unless
-  `HOMEBREW_NO_INSTALL_CLEANUP` is set). Loading takes a few minutes:
-  `tensorfold service status local-model` says when it is running, and
-  `tensorfold --version` which version is installed. Then skim
-  TensorFold's [changelog](https://github.com/ashhart/TensorFold/blob/main/CHANGELOG.md),
-  especially for client support (step 8; the client guide's "When TensorFold
-  updates" lists what to look for). Clients need no change.
-- **Tailscale:** `sudo brew services restart tailscale`.
+```sh
+sh scripts/1-install.sh
+sh scripts/3-services.sh
+```
+
+`1-install.sh` installs the release beside the old one and points `splash-m1`
+at it. The running server keeps the old version until it restarts.
+`3-services.sh` restarts it, because the LaunchAgent names the pinned version,
+then waits for the model and checks the endpoint. `splash-m1 --version` says
+which version is installed. Older versions stay under `~/Library/Application Support/Splash-M1`
+until you delete them. Clients need no change.
+
+**Update Tailscale** with Homebrew, `brew upgrade tailscale` or a routine
+`brew upgrade`, then restart it: `sudo brew services restart tailscale`.
 
 `sudo brew services` makes root own the running Tailscale's `bin/`, so the
 cleanup after a Tailscale upgrade fails with "Could not cleanup old kegs".
@@ -376,18 +421,51 @@ brew cleanup tailscale
 Leave the running version owned by root: the daemon runs as root, and a
 binary your account owns is one it could replace.
 
-**Change the model.** Set `LLM_MODEL` (and `LLM_DRAFTER`) in `config.env` and
-re-run `3-services.sh`; clients keep asking for `local-model`, but check the
-context window it reports and which clients the new template supports.
+**Change the model.** Set `LLM_MODEL` in `config.env` and re-run
+`3-services.sh`. It rewrites the LaunchAgent and restarts the server, which
+downloads the new model and its draft at its first start. Clients keep asking
+for `local-model`, but check the context window `/v1/models` reports.
 
-**Rotate the key.** Delete `~/.config/tensorfold/api-keys`, re-run
-`3-services.sh`, and update your clients. TensorFold rereads the key file within
-a second, so the server needs no restart.
+**Rotate the key.** Delete `~/.config/llm-server/api-key` and re-run
+`3-services.sh`. It makes a new key and restarts the server, because Splash
+reads the key only when it starts; the endpoint is down until the model is
+back, a minute or two. Then update your clients. If you change the file
+instead of deleting it, restart the server yourself (the table above).
 
 **Remove it.** `sudo sh scripts/uninstall.sh` turns off `tailscale serve`,
-removes the TensorFold service, the hardening jobs and the SSH hardening (so
-SSH accepts passwords again, the macOS default). It prints what it deliberately
-left: models, key, logs, packages, tailnet membership, power settings.
+removes Splash's LaunchAgent, the hardening jobs and the SSH hardening (so SSH
+accepts passwords again, the macOS default). It prints what it deliberately
+left: models, key, logs, Splash itself, Tailscale, tailnet membership, power
+settings. Splash's data folder, `~/Library/Application Support/Splash`, stays
+too.
+
+### Moving from TensorFold
+
+Earlier versions of this guide ran TensorFold 0.6.6 as a `tensorfold service`
+named `local-model`, on the same port. To move a Mac from it and keep the key,
+so that clients need no change:
+
+1. Copy the key into the file Splash's LaunchAgent reads, before
+   `3-services.sh` makes a new one:
+
+   ```sh
+   ( umask 077; mkdir -p ~/.config/llm-server && sed -n 's/^clients: *//p' ~/.config/tensorfold/api-keys > ~/.config/llm-server/api-key )
+   ```
+
+2. Stop TensorFold: `tensorfold service stop local-model`. It stays stopped
+   until you start it again; `tensorfold service uninstall local-model --yes`
+   removes it.
+3. Run `sh scripts/1-install.sh`, then `sh scripts/3-services.sh`.
+   `3-services.sh` refuses to start Splash while anything else listens on the
+   port.
+4. Once you no longer need TensorFold, run `brew uninstall tensorfold@0.6`.
+
+The endpoint is down from step 2 until `3-services.sh` reports it ready: 2 min
+51 s on this guide's Mac, with the new model already downloaded. The model and
+its draft come from other repositories than TensorFold's, so otherwise the
+first start downloads them, about 19 GB. TensorFold's files stay in the
+Hugging Face cache until you delete them. Clients keep working with their
+144,384-token context, and can raise it to 262,144 (step 8).
 
 ---
 
@@ -395,10 +473,10 @@ left: models, key, logs, packages, tailnet membership, power settings.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `401` | Missing or wrong key | Check the header; the key is the `clients:` line of `~/.config/tensorfold/api-keys` |
-| `502` from the endpoint | TensorFold is not running: after a restart, nobody has logged in | Log in over Screen Sharing; `tensorfold service status local-model` |
-| `400` "does not support mid-conversation system messages" | Claude Code, against a model whose template refuses them | Step 8 |
-| `400` "include is not supported" | Codex | Step 8 |
-| Empty answers | Output budget too small for a thinking model | Allow 16K+ output tokens (step 8) |
-| Service will not start after `brew upgrade` | Its interpreter path points at a deleted version | Re-run `3-services.sh` |
+| `401` | Missing or wrong key | Check the header; the key is the line in `~/.config/llm-server/api-key`. Splash reads it only when it starts, so after changing the file, restart the server (step 9) |
+| `403` "Host NAME is not allowed; restart the server with --allowed-host NAME" | The request names the server by a name it was not started with: a client uses another name, or the machine's tailnet name changed | Use `https://<machine>.<tailnet>.ts.net` in clients; after a rename, re-run `3-services.sh` |
+| `502` from the endpoint | Splash is not running: after a restart, nobody has logged in | Log in over Screen Sharing, then check its status (step 9) |
+| `503` `engine_recovering` | Splash's engine failed and is restarting; the message names the failure | Retry. If it fails three times soon after starting, Splash stops restarting it and answers `500` `engine_failed`: restart the server (step 9) and read the log |
+| Empty answers | The model spent the reply's output limit thinking | Allow 16K+ output tokens (step 8), and ask for `medium` reasoning effort |
+| `3-services.sh`: "something else listens on port 8080" | TensorFold from an earlier version of this guide, or another server | Moving from TensorFold (step 9) |
 | `Bootstrap failed: 5: Input/output error` | A launchd job was restarted too quickly | Re-run the script; it waits and retries |

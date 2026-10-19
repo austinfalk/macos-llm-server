@@ -4,7 +4,7 @@ config.env.*
 !config.env.example
 NEXT.md
 
-# Never commit the API key (it lives in ~/.config/tensorfold/, but be safe)
+# Never commit the API key (it lives in ~/.config/llm-server/, but be safe)
 api-key
 api-keys
 *.pem

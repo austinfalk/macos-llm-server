@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>@SPLASH_LABEL@</string>
+	<!-- Splash @SPLASH_VERSION@: a new pinned version changes this file, so
+	     3-services.sh restarts the server onto it. -->
+	<!-- The key reaches Splash in SPLASH_API_KEY, read from the key file at
+	     start, so it is never on a command line or in this plist. -->
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/sh</string>
+		<string>-c</string>
+		<string>SPLASH_API_KEY=$(head -1 "$0") &amp;&amp; [ -n "$SPLASH_API_KEY" ] || exit 1; export SPLASH_API_KEY; exec "$@"</string>
+		<string>@KEY_FILE@</string>
+		<string>@SPLASH_BIN@</string>
+		<string>serve</string>
+		<string>--model</string>
+		<string>@LLM_MODEL@</string>
+		<string>--port</string>
+		<string>@LLM_PORT@</string>
+		<string>--served-model-name</string>
+		<string>@LLM_SERVICE@</string>
+		<string>--announce-served-name</string>
+		<string>--allowed-host</string>
+		<string>@ENDPOINT_HOST@</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/usr/bin:/bin:/usr/sbin:/sbin</string>
+	</dict>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>ThrottleInterval</key>
+	<integer>30</integer>
+	<key>ExitTimeOut</key>
+	<integer>20</integer>
+	<key>ProcessType</key>
+	<string>Interactive</string>
+	<key>Umask</key>
+	<integer>63</integer>
+	<key>StandardOutPath</key>
+	<string>@SPLASH_LOG@</string>
+	<key>StandardErrorPath</key>
+	<string>@SPLASH_LOG@</string>
+</dict>
+</plist>
