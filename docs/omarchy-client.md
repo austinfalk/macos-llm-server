@@ -226,8 +226,9 @@ unless marked:
   it again ([network configuration](https://code.claude.com/docs/en/network-config#streaming-idle-watchdogs)).
   On 2026-10-18 that cancelled a turn that had thought for 600 s, and the
   resent request had to think again from the start. 30 minutes covers the
-  32,000-token output limit at the server's speed. No turn that long has been
-  run with the setting yet.
+  32,000-token output limit at the server's speed. With it, two requests at
+  95K tokens of context kept thinking for 794 s and 843 s after their first
+  token and finished.
 
 **Check:**
 
@@ -308,7 +309,13 @@ it: approvals and `clarify` stop reaching the app after 0.21.3 (omarchy
 **Remove borrowed credentials.** On first run Hermes imports what it finds,
 such as a Copilot credential from the `gh` CLI's login. `hermes auth list`
 should be empty. Remove anything there (`hermes auth remove copilot 1`), or it
-is a route off the server.
+is a route off the server. An empty list does not hide everything. The app's
+model picker can still show providers as signed in, such as Anthropic from
+plain `claude`'s login, Copilot from `gh`, and OpenCode Free, which needs no
+key. In 0.21.1 none of them receives a request unless you pick it. The main
+agent has no fallback (`fallback_providers: []`), and helper calls skip
+Anthropic unless it is configured and skip providers they have no helper
+model for (`agent/auxiliary_client.py`).
 
 Hermes runs helper calls in the background: compression, reviews, vision, web
 extraction, titles. Left at `auto`, each uses the main provider, and falls
@@ -362,8 +369,9 @@ Why each, checked against the 0.21.1 source:
   (`agent/agent_init.py`). For `high`, add a provider `tailnet-high`, a copy
   of `tailnet` with
   `extra_body: {reasoning_effort: high}`, and start Hermes with
-  `--provider tailnet-high` (check in `hermes --help` that it takes a name
-  from `providers:`).
+  `--provider tailnet-high --model mlx-community/Qwen3.8-27B-4bit`.
+  `hermes -z` refuses `--provider` without `--model`. The app's model picker
+  does not list `tailnet-high`, so this works from the terminal only.
 - Background review, a fork of the agent that every ~10 turns saves memories
   and skills, stays on, and runs on the main provider.
   `auxiliary.background_review.enabled: false` turns it off.
