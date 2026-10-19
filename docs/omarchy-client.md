@@ -45,16 +45,16 @@ Responses, and Anthropic Messages. Three facts shape every config below:
 
 ### What works today
 
-Splash 1.3.2-m1.1 with Qwen3.8-27B. OpenCode was run from this machine against
-Splash on 2026-10-18, and Hermes and OpenCode against TensorFold 0.6 on
-2026-10-03; Claude Code's and Codex's
-requests were checked on the server on 2026-10-18, against Splash:
+Splash 1.3.2-m1.1 with Qwen3.8-27B. OpenCode and Claude Code were run from this
+machine against Splash on 2026-10-18, and Hermes and OpenCode against
+TensorFold 0.6 on 2026-10-03; Codex's requests were checked on the server on
+2026-10-18, against Splash:
 
 | Tool | Use it for | API | Status |
 |---|---|---|---|
 | **Hermes Agent** (desktop app and `hermes`) | General agent work: research, writing, running commands, long tasks you check on later | chat completions | **Worked** against TensorFold; not yet run against Splash (step 5) |
 | **OpenCode** (`opencode`) | Coding in a repository, from the terminal | chat completions | **Works** against Splash (2026-10-18) and worked against TensorFold (step 6) |
-| Claude Code (`claude-local`) | Coding | Anthropic Messages | The API shapes work on the server; not yet run from this machine (step 3) |
+| Claude Code (`claude-local`) | Coding | Anthropic Messages | **Works** against Splash (2026-10-18; step 3) |
 | Codex (`codex-local`) | Coding | Responses | The API shapes work on the server; not yet run from this machine (step 4) |
 
 Any other tool that speaks OpenAI chat completions should work the same way:
@@ -200,13 +200,12 @@ Expected: `"id": "local-model"`. Without the key,
 
 ## 3. Claude Code, beside your normal login
 
-**Not yet run from this machine.** TensorFold refused every request
-(2026-10-03, Claude Code 2.1.288, TensorFold 0.6.5: HTTP 400, `the model's chat
-template does not support mid-conversation system messages`). Splash renders
-those messages in place, and on the server (2026-10-18) Claude Code's request
-shapes got 200 and Claude Code 2.x answered through Splash's own launcher; see
-"How to use this server" above. Run this step's check, and if it passes,
-record it in `docs/findings.md` and remove this note.
+**Works against Splash** (2026-10-18, from this machine). TensorFold refused
+every request (2026-10-03, Claude Code 2.1.288, TensorFold 0.6.5: HTTP 400,
+`the model's chat template does not support mid-conversation system
+messages`); Splash renders those messages in place. The first turn reads
+Claude Code's system prompt and tools, about 20K tokens, in about 2 minutes;
+later turns reuse the cache. Claude Code asks for effort `high`.
 
 Omarchy ships `claude` as a launcher that installs on first run. Keep your
 normal Anthropic login as plain `claude`, and add `claude-local`, which uses a

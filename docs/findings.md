@@ -152,8 +152,15 @@ tool call at 55.3 tok/s. The second turn read the README: 15,810 tokens, 8,512
 cached, first token after 40.6 s, then 512 tokens at 30.9 tok/s. From the
 question to the last token took 1 min 48 s.
 
-**Not run yet:** Codex and Hermes against Splash, and Claude Code from the
-client machine. Hermes and OpenCode use chat completions, the endpoint
+**Claude Code from the client machine** (`claude-local`, the client guide's
+setup, 2026-10-18): it worked on the first try. A small request (739 tokens,
+thinking off) took 4.9 s. The first turn, 20,109 tokens cold at effort `high`
+(Claude Code's own choice) with 23 tools, started writing after 111.9 s and
+made a tool call. The second turn, 27,249 tokens with 20,096 cached, started
+after 45.9 s and wrote 872 tokens at 26.6 tok/s. It took 3 min 15 s in all,
+with nothing refused.
+
+**Not run yet:** Codex and Hermes against Splash. Hermes and OpenCode use chat completions, the endpoint
 measured above. Splash's own launchers
 (`splash-m1 claude|codex|opencode|hermes|pi`) connect to a server on the same
 Mac only, so another machine configures each client by hand, as the client
