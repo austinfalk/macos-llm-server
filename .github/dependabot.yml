@@ -1,0 +1,14 @@
+# Weekly updates for the pinned GitHub Actions, grouped into one pull request.
+# Releases wait out a cooldown first: most malicious versions are pulled within
+# days.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 5
+    groups:
+      actions:
+        patterns: ['*']
