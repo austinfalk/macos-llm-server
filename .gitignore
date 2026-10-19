@@ -5,8 +5,7 @@ config.env.*
 NEXT.md
 
 # Never commit the API key (it lives in ~/.config/llm-server/, but be safe)
-api-key
-api-keys
+api-key*
 *.pem
 *.key
 *.p12

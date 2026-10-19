@@ -777,7 +777,7 @@ while you are logged in on the Mac; after a restart, log in through Remmina
 
 Tell the user what passed, what failed, and the first-turn and later-turn times
 from steps 5 and 6. Commit changes to this repo only if commit signing works on this
-machine (CLAUDE.md); otherwise leave them for the user.
+machine (AGENTS.md); otherwise leave them for the user.
 
 ## Later
 

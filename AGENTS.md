@@ -32,6 +32,8 @@ release.
   LaunchAgent) and the hardening step (pf, sshd, battery watchdog) install,
   with `@PLACEHOLDERS@` filled by `render()` in `lib.sh`. `config.env`
   (gitignored) overrides the defaults in `lib.sh`.
+- `docs/` — `findings.md`, the measurements and their history, and
+  `omarchy-client.md`, the client guide.
 
 ## Conventions
 
@@ -62,5 +64,7 @@ release.
   (`curl_hdr` in `lib.sh`), and to Splash in `SPLASH_API_KEY`, which the
   LaunchAgent's shell reads from the key file at start.
 - Record results in `docs/findings.md` with what they changed.
+- Only `docs/findings.md` names engines this server no longer runs. Everything
+  else describes the current setup.
 - Commits are signed with the maintainer's SSH signing key through 1Password.
   If signing fails, say so and ask; do not fall back to unsigned commits.

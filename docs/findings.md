@@ -346,6 +346,28 @@ error messages), not a configuration fault:
 and Codex setups ready for a TensorFold release that accepts their requests,
 and says what to look for in its changelog.
 
+**Moving a Mac from TensorFold** (2026-10-18). Earlier versions of this
+guide ran TensorFold 0.6.6 as a `tensorfold service` named `local-model`, on
+the same port. The move kept the key, so clients needed no change:
+
+1. Copy the key into the file Splash's LaunchAgent reads, before
+   `3-services.sh` makes a new one:
+
+   ```sh
+   ( umask 077; mkdir -p ~/.config/llm-server && sed -n 's/^clients: *//p' ~/.config/tensorfold/api-keys > ~/.config/llm-server/api-key )
+   ```
+
+2. Stop TensorFold: `tensorfold service stop local-model`.
+   `tensorfold service uninstall local-model --yes` removes it.
+3. Run `sh scripts/1-install.sh`, then `sh scripts/3-services.sh`.
+4. Once TensorFold is no longer needed, run `brew uninstall tensorfold@0.6`.
+
+The endpoint was down from step 2 until `3-services.sh` reported it ready:
+2 min 51 s, with the new model already downloaded. The model and its draft
+come from other repositories than TensorFold's, so otherwise the first start
+downloads them, about 19 GB. TensorFold's files stay in the Hugging Face cache
+until deleted.
+
 ## History: TensorFold's native engine (1.0.12) on this Mac
 
 TensorFold's Python line is frozen at 0.6.6; client fixes now land only in its

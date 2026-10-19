@@ -54,8 +54,7 @@ if [ $new_key = no ] && [ -f "$SPLASH_PLIST" ] && cmp -s "$new" "$SPLASH_PLIST" 
 else
 	if lsof -nP -iTCP:"$LLM_PORT" -sTCP:LISTEN >/dev/null 2>&1 && ! job_loaded "gui/$LLM_UID/$SPLASH_LABEL"; then
 		rm -f "$new"
-		die "something else listens on port $LLM_PORT: $(lsof -nP -iTCP:"$LLM_PORT" -sTCP:LISTEN | awk 'NR == 2 {print $1, "pid", $2}')
-       If it is TensorFold from an earlier version of this guide: README, \"Moving from TensorFold\"."
+		die "something else listens on port $LLM_PORT: $(lsof -nP -iTCP:"$LLM_PORT" -sTCP:LISTEN | awk 'NR == 2 {print $1, "pid", $2}'). Stop it, then re-run this script."
 	fi
 	job_loaded "gui/$LLM_UID/$SPLASH_LABEL" && info "restarting with new settings: the endpoint is down until it is back"
 	mv -f "$new" "$SPLASH_PLIST"
