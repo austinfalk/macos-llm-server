@@ -67,9 +67,11 @@ You need these from the server's owner:
 | Hermes Agent (desktop app and `hermes`) | General agent work: research, writing, running commands, long tasks you check on later | chat completions | 5 |
 | OpenCode (`opencode`) | Coding in a repository, from the terminal | chat completions | 6 |
 
-All four worked from this machine on 2026-10-18 with these settings, after
-working with an earlier version of them
-([findings](findings.md#the-server-splash-for-m1m2-and-qwen38-27b)). Any other
+All four passed step 7 from this machine on 2026-10-18 with these settings,
+after working with an earlier version of them
+([findings](findings.md#the-server-splash-for-m1m2-and-qwen38-27b)). The one
+failure was a `claude-local` turn that thought for more than 10 minutes, which
+step 3's `CLAUDE_STREAM_IDLE_TIMEOUT_MS` is for. Any other
 tool that speaks OpenAI chat completions should work the same way: base URL `ENDPOINT/v1`, the key from step 2, and the
 model ID above.
 
@@ -224,7 +226,8 @@ unless marked:
   it again ([network configuration](https://code.claude.com/docs/en/network-config#streaming-idle-watchdogs)).
   On 2026-10-18 that cancelled a turn that had thought for 600 s, and the
   resent request had to think again from the start. 30 minutes covers the
-  32,000-token output limit at the server's speed.
+  32,000-token output limit at the server's speed. No turn that long has been
+  run with the setting yet.
 
 **Check:**
 
