@@ -277,13 +277,22 @@ leaves 1Password.
    `<machine>.<tailnet>.ts.net`), accept the fingerprint you just checked, and
    approve the key in 1Password.
 
-**Check:** `ssh <machine> 'sw_vers -productVersion; /opt/homebrew/bin/splash-m1 --version; curl -s -o /dev/null -w "%{http_code}\n" 127.0.0.1:8000/ready'`
-prints the macOS version, Splash's version, and 200 when the model server is
-ready. A command run this way gets no login shell, so Homebrew's tools are not
-on its `PATH`. Interactively (`ssh <machine>`) `splash-m1` works; in a one-off
-command, use its full path. The server lives in your GUI login, so it runs only
-while you are logged in on the Mac. After a restart, log in through Remmina
-(step 1) first.
+**Check:**
+
+```sh
+ssh <machine> 'sw_vers -productVersion
+  /opt/homebrew/bin/splash-m1 --version 2>/dev/null || /opt/homebrew/bin/splash --version
+  curl -s -o /dev/null -w "%{http_code}\n" 127.0.0.1:8000/ready'
+```
+
+It prints the macOS version, Splash's version, and 200 when the model server
+is ready. An M1 or M2 runs the port's `splash-m1`, and an M3 or later runs
+`splash`, so the command tries both. A command run this way gets no login
+shell, so Homebrew's tools are not on its `PATH`, and the command names them by
+full path. In an interactive login (`ssh <machine>`), `splash-m1 --version` or
+`splash --version` works without the path. The server lives in your GUI login,
+so it runs only while you are logged in on the Mac. After a restart, log in
+through Remmina (step 1) first.
 
 ## Later
 
