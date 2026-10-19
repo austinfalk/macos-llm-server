@@ -220,7 +220,8 @@ unless marked:
   cold 90K-token prompt takes 10 minutes to read.
 - `CLAUDE_STREAM_IDLE_TIMEOUT_MS` lets a turn think for longer than 10
   minutes. While the model thinks, Splash sends Claude Code only keep-alive
-  `ping` events, because Claude Code asks it not to show the thinking.
+  `ping` events. Claude Code asks for the thinking as `omitted` in `-p`
+  sessions and as `updates` in interactive ones, and Splash streams neither.
   Claude Code accepts about five minutes of pings, then waits this long for
   real output, 5 minutes by default, before it cancels the request and sends
   it again ([network configuration](https://code.claude.com/docs/en/network-config#streaming-idle-watchdogs)).
