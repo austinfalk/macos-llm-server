@@ -53,13 +53,19 @@ if [ -f "$DROPIN" ]; then
 	fi
 fi
 
+case $SPLASH_VARIANT in
+	port) splash="$SPLASH_HOME, $SPLASH_BIN" ;;
+	upstream) splash="brew unpin splash && brew uninstall splash" ;;
+	*) splash="none: no Splash build runs on ${CPU_BRAND:-this chip}" ;;
+esac
 cat <<LEFT
 
 == Left in place, on purpose
   models           ~/.cache/huggingface/hub    (hf cache delete, or delete the folder)
   API key          $KEY_FILE
   logs             $SPLASH_LOG, $LLM_LOGS
-  Splash           $SPLASH_HOME, $SPLASH_BIN, $LLM_HOME/Library/Application Support/Splash
+  Splash           $splash
+  Splash's data    $LLM_HOME/Library/Application Support/Splash
   packages         brew uninstall tailscale
   tailnet          sudo tailscale logout
   power settings   pmset -g custom   (these are ordinary macOS settings)

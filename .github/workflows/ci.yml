@@ -39,4 +39,6 @@ jobs:
           shellcheck --version
           shellcheck -x -s sh scripts/*.sh config/*.sh
 
+      - run: sh scripts/test-variant.sh
+
       - run: sh scripts/check-public.sh
