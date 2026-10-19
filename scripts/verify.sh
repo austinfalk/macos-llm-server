@@ -40,7 +40,7 @@ else
 fi
 
 step "Splash"
-pass "$(sudo -u "$LLM_USER" "$SPLASH_BIN" --version 2>/dev/null || echo "splash-m1: not installed")"
+expect "Splash version" "$(sudo -u "$LLM_USER" "$SPLASH_BIN" --version 2>/dev/null)" "Splash $SPLASH_VERSION"
 if job_loaded "gui/$LLM_UID/$SPLASH_LABEL"; then
 	pass "server $SPLASH_LABEL loaded in $LLM_USER's login session"
 elif [ "$(stat -f %Su /dev/console)" != "$LLM_USER" ]; then
@@ -83,7 +83,7 @@ expect "metrics without a key" "$(http_code "$EP/metrics")" 401
 # With keys configured, /health stays open but says nothing else.
 expect "health without a key" "$(curl -s -m 10 "$EP/health")" '{"status":"ok"}'
 expect "model ID clients see" \
-	"$(curl_hdr "Authorization: Bearer $KEY" -s -m 20 "$EP/v1/models" | plutil -extract data.0.id raw -o - - 2>/dev/null)" "$LLM_SERVICE"
+	"$(curl_hdr "Authorization: Bearer $KEY" -s -m 20 "$EP/v1/models" | plutil -extract data.0.id raw -o - - 2>/dev/null)" "$LLM_MODEL"
 
 step "Machine"
 if defaults read /Library/Preferences/com.apple.loginwindow autoLoginUser >/dev/null 2>&1; then

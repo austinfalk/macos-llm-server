@@ -33,9 +33,10 @@ prefill commands so that macOS does not abort long prompts
 Everything is stock but the service: the port's release installer, pinned by
 version and SHA-256; the MLX 4-bit checkpoint its release notes name; the
 DFlash2 draft Splash pairs with it, `incoai/Qwen3.8-27B-DFlash2`; and Splash's
-defaults, with five flags. `--model` and `--port 8080` choose the model and the
-port. `--served-model-name local-model` and `--announce-served-name` keep the
-model ID clients use. `--allowed-host`, with the machine's tailnet name, lets
+defaults, with five flags (three since 2026-10-19, see **Changed** below).
+`--model` and `--port 8080` choose the model and the port.
+`--served-model-name local-model` and `--announce-served-name` keep the model
+ID clients use. `--allowed-host`, with the machine's tailnet name, lets
 requests through `tailscale serve` in: Splash answers 403 to a Host name it
 does not know ("Host example.com is not allowed; restart the server with
 --allowed-host example.com"), a guard against DNS rebinding, and
@@ -201,6 +202,20 @@ of TensorFold 0.6.6's service. The key is a bare key in
 so clients did not change. Clients may use 262,144 tokens of context, and
 their configs still say 144,384, which works. The client guide no longer marks
 Claude Code and Codex as refused.
+
+**Changed** (2026-10-19): the server uses Splash's defaults where it can.
+Splash listens on its default port, 8000, instead of 8080. The model ID is the
+repository ID, `mlx-community/Qwen3.8-27B-4bit`: the `local-model` alias
+existed only to keep TensorFold-era client configs working. And the LaunchAgent
+passes `--default-reasoning-effort medium`, so requests that name no effort get
+`medium` instead of the template's `xhigh`, on the evidence in "Reasoning
+effort" below (Kodesage: substance 8.18 at `medium` against 8.61 at `xhigh`,
+median 76 against 143 s; QwenLM/Qwen3.8 #216: about 19% empty answers at
+`xhigh`, none at `medium`). Clients that ask for `local-model` must ask for
+the repository ID instead. The alias is not needed for clients that check the
+name: Splash's DEVELOPMENT.md ("API model aliases") says some clients reject a
+response whose `model` differs from the name they asked for, and a client that
+asks for the repository ID gets it back *(sourced)*.
 
 ## History: TensorFold 0.6 and Qwen3.8-27B
 

@@ -42,8 +42,6 @@ key | grep -Eqx '[A-Za-z0-9]{32,}' \
 	|| die "$KEY_FILE does not hold a key of 32+ letters and digits. Delete it and re-run to make a new one."
 
 step "Server"
-# Everything not named in the plist is Splash's default: context, memory,
-# draft, KV format, Neural Engine prefill, sampling, reasoning.
 mkdir -p "$(dirname "$SPLASH_PLIST")" "$(dirname "$SPLASH_LOG")"
 new=$SPLASH_PLIST.new.$$
 render com.llmserver.splash.plist "$new" 600 "$LLM_USER:staff"
@@ -59,20 +57,20 @@ else
 	job_loaded "gui/$LLM_UID/$SPLASH_LABEL" && info "restarting with new settings: the endpoint is down until it is back"
 	mv -f "$new" "$SPLASH_PLIST"
 	start_job "gui/$LLM_UID" "$SPLASH_LABEL" "$SPLASH_PLIST" \
-		|| die "the server did not start, so the endpoint is down. See: $SPLASH_LOG"
+		|| die "the server did not start, so the endpoint is down. Read $SPLASH_LOG, fix the cause, then re-run sh scripts/3-services.sh"
 	ok "started $SPLASH_LABEL"
 fi
 
-# The first start downloads the model and its draft (about 20 GB), prepares
-# the weights and times the Neural Engine against the GPU; later starts take
-# a minute or two.
 info "waiting for the model (the first start can take half an hour)"
+runs() { launchctl print "gui/$LLM_UID/$SPLASH_LABEL" 2>/dev/null | awk '$1 == "runs" {print $3; exit}'; }
+runs0=$(runs)
+crash_looping() { [ "$(runs)" -ge $((${runs0:-1} + 2)) ]; }
 n=0
 until curl -s -o /dev/null -m 5 -w '%{http_code}' "http://127.0.0.1:$LLM_PORT/ready" 2>/dev/null | grep -qx 200; do
 	n=$((n + 1))
-	if [ $n -ge 720 ] || ! job_loaded "gui/$LLM_UID/$SPLASH_LABEL"; then
+	if [ $n -ge 720 ] || crash_looping || ! job_loaded "gui/$LLM_UID/$SPLASH_LABEL"; then
 		tail -15 "$SPLASH_LOG" 2>/dev/null | sed 's/^/        log: /'
-		die "the server did not come up, so the endpoint is down. See: $SPLASH_LOG"
+		die "the server did not come up, so the endpoint is down. Read $SPLASH_LOG, fix the cause, then re-run sh scripts/3-services.sh"
 	fi
 	sleep 5
 done
@@ -95,7 +93,7 @@ if [ "$unauth" = 401 ]; then ok "without the key -> 401"; else bad "without the 
 [ "$code" = 200 ] && [ "$unauth" = 401 ] \
 	|| die "the endpoint is not healthy. See: $SPLASH_LOG"
 
-printf '\nEndpoint: %s/v1   model: %s\nKey:      %s\n\nNext:\n' "$EP" "$LLM_SERVICE" "$KEY_FILE"
+printf '\nEndpoint: %s/v1   model: %s\nKey:      %s\n\nNext:\n' "$EP" "$LLM_MODEL" "$KEY_FILE"
 if [ -f /etc/ssh/sshd_config.d/200-llm-server.conf ] || launchctl print "system/$L_PF" >/dev/null 2>&1; then
 	printf '    sudo sh scripts/verify.sh\n'
 else

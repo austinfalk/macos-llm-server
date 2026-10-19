@@ -21,11 +21,9 @@ if tailscale serve status 2>/dev/null | grep -q "127.0.0.1:$LLM_PORT"; then
 		warn "could not stop tailscale serve: run 'tailscale serve --https=443 off'"
 	fi
 fi
-if [ -f "$SPLASH_PLIST" ]; then
-	stop_job "gui/$LLM_UID/$SPLASH_LABEL"
-	rm -f "$SPLASH_PLIST"
-	ok "Splash server $SPLASH_LABEL removed"
-fi
+stop_job "gui/$LLM_UID/$SPLASH_LABEL"
+rm -f "$SPLASH_PLIST"
+ok "Splash server $SPLASH_LABEL removed"
 
 step "Hardening"
 stop_job "system/$L_WATCHDOG"
