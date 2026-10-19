@@ -130,7 +130,9 @@ json_value() { printf '%s' "$1" | plutil -extract "$2" raw -o - - 2>/dev/null ||
 
 # Every bottle must match, not only one for this macOS: Homebrew pours a bottle
 # built for an earlier macOS when there is none for this one. Auto-update is off
-# for the install, so the tap cannot move after the check.
+# for the install, so the tap cannot move after the check. Cleanup is off too:
+# on an upgrade the running server still uses the old version's files until
+# 3-services.sh restarts it.
 install_upstream_splash() {
 	brew tap incoai/tap || die "could not add the Homebrew tap incoai/tap"
 	_json=$(brew info --json=v2 incoai/tap/splash) || die "could not read the formula incoai/tap/splash"
@@ -144,9 +146,10 @@ install_upstream_splash() {
     version  ${_version:-none} (pinned $SPLASH_VERSION)
     tarball  ${_archive:-none} (pinned $SPLASH_ARCHIVE_SHA256)
     bottles  ${_bottles:-none} (pinned $SPLASH_BOTTLE_SHA256)
-Upstream moved. Read its release notes, then bump SPLASH_VERSION and the
-checksums in scripts/variant.sh."
-	HOMEBREW_NO_AUTO_UPDATE=1 brew install incoai/tap/splash || die "brew install incoai/tap/splash failed"
+Either the local tap is behind (run brew update, then this script again) or
+upstream moved (read its release notes, then bump SPLASH_VERSION and the
+checksums in scripts/variant.sh)."
+	HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install incoai/tap/splash || die "brew install incoai/tap/splash failed"
 	brew pin splash || die "could not pin splash in Homebrew"
 }
 
