@@ -160,7 +160,17 @@ made a tool call. The second turn, 27,249 tokens with 20,096 cached, started
 after 45.9 s and wrote 872 tokens at 26.6 tok/s. It took 3 min 15 s in all,
 with nothing refused.
 
-**Not run yet:** Codex and Hermes against Splash. Hermes and OpenCode use chat completions, the endpoint
+**Hermes Agent from the client machine** (0.21.0, its existing config
+unchanged, 2026-10-18): it worked, in five requests over 3 min 43 s, with
+effort `medium` arriving through `extra_body` and 20 tools. The first turn,
+12,177 tokens cold, started writing after 61.4 s (0.6.6: 125.8 s for 13,532).
+Most follow-ups started in about 2 s. One turn found only 8,192 of its 13,742
+tokens cached although the turn before had 12,352: Hermes's prompt probably
+changed before that point (not confirmed), and that turn waited 30.2 s. Before
+its first request Hermes asked for Ollama's `POST /api/show`, which Splash
+answers 404; Hermes went on without it.
+
+**Not run yet:** Codex against Splash. Hermes and OpenCode use chat completions, the endpoint
 measured above. Splash's own launchers
 (`splash-m1 claude|codex|opencode|hermes|pi`) connect to a server on the same
 Mac only, so another machine configures each client by hand, as the client
