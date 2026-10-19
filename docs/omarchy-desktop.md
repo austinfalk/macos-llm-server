@@ -7,7 +7,8 @@ of it ([omarchy-client.md](omarchy-client.md)). But the model server runs in
 your login session on the Mac, so after the Mac restarts, the desktop is how
 you log in and start it again. Follow it the way you follow the client guide:
 one step at a time, with its check. Anything that needs `sudo` or a GUI is the
-user's.
+user's. Working on Omarchy 4.0.5 in October 2026 with Remmina 1.4.43,
+moonlight-qt 6.2.0, Tailscale 1.104.1 and 1Password 8.12.40.
 
 **Before you start.** The Omarchy machine is on the tailnet (the client guide,
 step 1). On the server, the owner has:

@@ -3,9 +3,9 @@
 How to connect an [Omarchy](https://omarchy.org) machine to the server and use
 it from Claude Code, Codex, Hermes Agent and OpenCode. Written to be followed
 step by step, by a person or by a Claude Code session running in a clone of
-this repository on the Omarchy machine. Researched against Omarchy 4.0.4,
-Claude Code's current docs, Codex rust-v0.157.1, Hermes Agent 0.21.0 (as
-`hermes-desktop 2026.8.31-3` installs it) and OpenCode 1.18.34, with the server
+this repository on the Omarchy machine. Last followed on Omarchy 4.0.5 with
+Claude Code 2.1.302, Codex 0.163.0, Hermes Agent 0.21.1 (as
+`hermes-desktop 2026.9.7-5` installs it) and OpenCode 2.0.32, with the server
 on Splash's M1/M2 port 1.3.2-m1.1 (October 2026). The Mac's desktop and SSH to
 the server are in [omarchy-desktop.md](omarchy-desktop.md).
 
@@ -67,10 +67,12 @@ You need these from the server's owner:
 | Hermes Agent (desktop app and `hermes`) | General agent work: research, writing, running commands, long tasks you check on later | chat completions | 5 |
 | OpenCode (`opencode`) | Coding in a repository, from the terminal | chat completions | 6 |
 
-All four worked from this machine on 2026-10-18 with an earlier version of
-these settings ([findings](findings.md#the-server-splash-for-m1m2-and-qwen38-27b)).
-Step 7 checks this version. Any other tool that speaks OpenAI chat completions
-should work the same way: base URL `ENDPOINT/v1`, the key from step 2, and the
+All four passed step 7 from this machine on 2026-10-18 with these settings,
+after working with an earlier version of them
+([findings](findings.md#the-server-splash-for-m1m2-and-qwen38-27b)). The one
+failure was a `claude-local` turn that thought for more than 10 minutes, which
+step 3's `CLAUDE_STREAM_IDLE_TIMEOUT_MS` is for. Any other
+tool that speaks OpenAI chat completions should work the same way: base URL `ENDPOINT/v1`, the key from step 2, and the
 model ID above.
 
 ### Working well with it
@@ -112,7 +114,7 @@ Splash renders `high` as `xhigh` for this template. For `high` on one task:
 | Claude Code | Start it as `CLAUDE_CODE_EFFORT_LEVEL=high claude-local` |
 | Codex | Add `-c model_reasoning_effort=high` to `codex-local` |
 | Hermes | Start it with a second provider that asks for it (step 5) |
-| OpenCode | **Ctrl+T** in the TUI, or `opencode run --variant high` |
+| OpenCode | **Ctrl+T** in the TUI, or `opencode run --model tailnet/mlx-community/Qwen3.8-27B-4bit#high` |
 
 ## 1. Tailscale
 
@@ -132,12 +134,16 @@ tailscale ping <machine>         # "via <LAN address>" = direct; "via DERP" = re
 
 ```sh
 mkdir -p ~/.config/llm-server && chmod 700 ~/.config/llm-server
-( umask 077; op read --no-newline "op://Private/LLM server API key/credential" > ~/.config/llm-server/api-key )
+( umask 077; op read --no-newline "op://Private/LLM server API key/credential" > ~/.config/llm-server/api-key.new ) \
+  && mv ~/.config/llm-server/api-key.new ~/.config/llm-server/api-key
 ```
+
+Writing to a new file first keeps the old key in place if `op` fails, for
+example when 1Password is locked.
 
 OpenCode reads the file as it is, and would send a trailing newline as part of
 the key, hence `--no-newline`. Every tool below reads this one file, so when
-the server's key changes, run the line again and nothing else.
+the server's key changes, run the command again and nothing else.
 
 **Check.** The key goes to curl on stdin, never on its command line:
 
@@ -185,7 +191,8 @@ exec claude "$@"
     "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "262144",
     "CLAUDE_CODE_ALWAYS_ENABLE_EFFORT": "1",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-    "API_TIMEOUT_MS": "1800000"
+    "API_TIMEOUT_MS": "1800000",
+    "CLAUDE_STREAM_IDLE_TIMEOUT_MS": "1800000"
   },
   "permissions": {"deny": ["WebSearch"]}
 }
@@ -211,6 +218,18 @@ unless marked:
   headers within it, 10 minutes by default, and nobody has checked whether
   Splash sends them before it has read the prompt. At 150 tokens a second, a
   cold 90K-token prompt takes 10 minutes to read.
+- `CLAUDE_STREAM_IDLE_TIMEOUT_MS` lets a turn think for longer than 10
+  minutes. While the model thinks, Splash sends Claude Code only keep-alive
+  `ping` events. Claude Code asks for the thinking as `omitted` in `-p`
+  sessions and as `updates` in interactive ones, and Splash streams neither.
+  Claude Code accepts about five minutes of pings, then waits this long for
+  real output, 5 minutes by default, before it cancels the request and sends
+  it again ([network configuration](https://code.claude.com/docs/en/network-config#streaming-idle-watchdogs)).
+  On 2026-10-18 that cancelled a turn that had thought for 600 s, and the
+  resent request had to think again from the start. 30 minutes covers the
+  32,000-token output limit at the server's speed. With it, two requests at
+  95K tokens of context kept thinking for 794 s and 843 s after their first
+  token and finished.
 
 **Check:**
 
@@ -219,9 +238,11 @@ claude-local -p "Reply with the single word OK."    # OK, after thinking
 claude -p "Reply with the single word OK."          # still your Anthropic account
 ```
 
-The first reply takes about two minutes. On one attempt on the server the
-model went off task and explored the machine with tool calls instead of
-answering. If that happens, stop it and run the check again.
+The first reply takes about two minutes. Claude Code first prints
+`[claude-code:unrecognized_model]`, because it does not know the model ID.
+That is expected. On one attempt on the server the model went off task and
+explored the machine with tool calls instead of answering. If that happens,
+stop it and run the check again.
 
 ## 4. Codex
 
@@ -266,27 +287,36 @@ stream that sends nothing for that long, and nobody has checked whether Splash
 sends anything while it reads a long prompt.
 
 **Check:** `codex-local exec "Reply with the single word OK."`, and plain
-`codex` still uses your normal account.
+`codex` still uses your normal account. Codex warns that it has no model
+metadata for the model ID and uses fallback metadata. That is expected,
+because the profile sets the window and compaction itself.
 
 ## 5. Hermes Agent
 
 Install **Hermes Desktop**, which also provides the `hermes` command. It needs
-`sudo`, so the user runs `omarchy install ai hermes`. Not
-`omarchy install hermes cli`, which installs from PyPI, where Hermes stopped
-publishing after 0.19.0 (hermes-agent PR #68217). The app installs Hermes from
-git under `~/.hermes/hermes-agent`, pinned to the release the package was
-built from: `hermes-desktop 2026.8.31-3` gives Hermes 0.21.0.
+`sudo`, so the user runs `omarchy install ai hermes` (Install → AI → Hermes
+Desktop in the menu). `omarchy install hermes cli` installs the same app
+without opening it. The app installs Hermes from git under
+`~/.hermes/hermes-agent`, pinned to the release the package was built from:
+`hermes-desktop 2026.9.7-5` gives Hermes 0.21.1.
 
 **Do not update Hermes**, neither with the app's *Check for updates* nor with
-`hermes update`, until Omarchy ships a newer `hermes-desktop`. The backend
-updates without the app, and the mismatch breaks it: approvals and `clarify`
-stop reaching the app after 0.21.3 (omarchy #12760), and on current `main` the
-launcher crashes before opening a window (omarchy-pkgs #670).
+`hermes update`. Let it change only when an Omarchy update brings a newer
+`hermes-desktop`. The backend updates without the app, and the mismatch breaks
+it: approvals and `clarify` stop reaching the app after 0.21.3 (omarchy
+#12760), and on current `main` the launcher crashes before opening a window
+(omarchy-pkgs #670).
 
 **Remove borrowed credentials.** On first run Hermes imports what it finds,
 such as a Copilot credential from the `gh` CLI's login. `hermes auth list`
 should be empty. Remove anything there (`hermes auth remove copilot 1`), or it
-is a route off the server.
+is a route off the server. An empty list does not hide everything. The app's
+model picker can still show providers as signed in, such as Anthropic from
+plain `claude`'s login, Copilot from `gh`, and OpenCode Free, which needs no
+key. In 0.21.1 none of them receives a request unless you pick it. The main
+agent has no fallback (`fallback_providers: []`), and helper calls skip
+Anthropic unless it is configured and skip providers they have no helper
+model for (`agent/auxiliary_client.py`).
 
 Hermes runs helper calls in the background: compression, reviews, vision, web
 extraction, titles. Left at `auto`, each uses the main provider, and falls
@@ -326,7 +356,7 @@ endpoint itself (`provider: custom`), though, and whether Hermes reads
 not been checked. Confirm it in the source under `~/.hermes/hermes-agent`. If
 Hermes reads the limit elsewhere, tell the user.
 
-Why each, checked against the 0.21.0 source:
+Why each, checked against the 0.21.1 source:
 
 - `key_cmd` prints the key, so the app, started from the menu with no shell
   environment, reads the same file as everything else. `provider: main` is
@@ -334,13 +364,15 @@ Why each, checked against the 0.21.0 source:
 - `request_timeout_seconds` sets the request and stream timeouts, for the app
   too. 30 minutes is a precaution, as in the other clients.
 - No effort setting. Hermes sends its own `agent.reasoning_effort` only to
-  providers it knows (`_supports_reasoning_extra_body()` in `run_agent.py`),
-  so its requests get the server's `medium`. It does merge a provider's
-  `extra_body` into every request (`agent/agent_init.py`). For `high`, add a
-  provider `tailnet-high`, a copy of `tailnet` with
+  providers it knows (`_supports_reasoning_extra_body()` in
+  `agent/reasoning_params.py`), so its requests get the server's `medium`.
+  It does merge a provider's `extra_body` into every request
+  (`agent/agent_init.py`). For `high`, add a provider `tailnet-high`, a copy
+  of `tailnet` with
   `extra_body: {reasoning_effort: high}`, and start Hermes with
-  `--provider tailnet-high` (check in `hermes --help` that it takes a name
-  from `providers:`).
+  `--provider tailnet-high --model mlx-community/Qwen3.8-27B-4bit`.
+  `hermes -z` refuses `--provider` without `--model`. The app's model picker
+  does not list `tailnet-high`, so this works from the terminal only.
 - Background review, a fork of the agent that every ~10 turns saves memories
   and skills, stays on, and runs on the main provider.
   `auxiliary.background_review.enabled: false` turns it off.
@@ -395,7 +427,8 @@ app.
     "general": {"model": "tailnet/mlx-community/Qwen3.8-27B-4bit"},
     "explore": {"model": "tailnet/mlx-community/Qwen3.8-27B-4bit"},
     "title": {"model": "tailnet/mlx-community/Qwen3.8-27B-4bit"},
-    "compaction": {"model": "tailnet/mlx-community/Qwen3.8-27B-4bit"}
+    "compaction": {"model": "tailnet/mlx-community/Qwen3.8-27B-4bit"},
+    "summary": {"model": "tailnet/mlx-community/Qwen3.8-27B-4bit"}
   },
   "permission": {
     "edit": "ask",
@@ -410,11 +443,14 @@ app.
 }
 ```
 
-Keep any keys already in the file (Omarchy's has `autoupdate`). If it has an
-`agent` section, keep each agent's other settings and set its `model`. Plain
+Keep any keys already in the file (Omarchy's has `theme` and `autoupdate`).
+If it has an `agent` section, keep each agent's other settings and set its
+`model`. Plain
 `opencode` then uses the server.
 
-Why each, checked against OpenCode 1.18.34's config schema:
+Why each, checked against OpenCode 1.18.34's config schema. OpenCode 2.0.32
+reads the same file and converts it, and `opencode debug config` shows the
+result:
 
 - The model reference is the provider, a slash, and an ID with a slash of its
   own, the shape the port's launcher writes
@@ -423,9 +459,14 @@ Why each, checked against OpenCode 1.18.34's config schema:
   the window less the output, all as the launcher sets them.
 - `agent`: an agent's own `model` outranks the top-level one, so the launcher
   pins each built-in agent to the served model, and so does this config.
-- `reasoning: true` makes OpenCode build **low / medium / high** variants,
-  which **Ctrl+T** switches between (`--variant` for `opencode run`). With no
-  variant chosen, OpenCode sends no effort, and the server's `medium` applies.
+  OpenCode 2.0.32 adds a `summary` agent, pinned here too, and makes
+  `small_model` the `title` agent's model.
+- `reasoning: true` makes OpenCode 1.x build **low / medium / high**
+  variants. OpenCode 2.0.32 logs the key as an unsupported legacy setting and
+  ignores it, but offers the same three variants. **Ctrl+T** switches between
+  them in the TUI. For `opencode run`, add the variant to the model with `#`,
+  as in the table under **Reasoning effort**. With no variant chosen,
+  OpenCode sends no effort, and the server's `medium` applies.
 - `chunkTimeout` is the longest OpenCode waits between pieces of a streamed
   reply. After its default, 5 minutes, it drops the request (in testing, it
   then sent it again). Nobody has checked whether Splash sends anything while
@@ -442,13 +483,13 @@ Why each, checked against OpenCode 1.18.34's config schema:
 **Check:** `opencode run "Reply with the single word OK."`, then
 `opencode run -c "Now reply with the single word YES."`. `opencode run` exits
 once the reply is in, so a title request still thinking may be dropped, which
-is harmless.
+is harmless. It exits with 0 even after an error, so read its output.
 
 ## 7. Check all four, and report
 
 1. **Each client once.** Run any check in steps 3-6 that has not run yet, and
    note the time to the first word of a first turn and of a follow-up.
-2. **The OpenCode model ID.** `opencode models tailnet` should list
+2. **The OpenCode model ID.** `opencode models | grep '^tailnet/'` should list
    `tailnet/mlx-community/Qwen3.8-27B-4bit`, and step 6's check should have
    answered. If OpenCode reports the model as unknown, stop and tell the user.
 3. **Effort.** Ask the user to run this on the server, or over SSH
