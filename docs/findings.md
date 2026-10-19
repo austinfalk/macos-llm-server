@@ -170,7 +170,16 @@ changed before that point (not confirmed), and that turn waited 30.2 s. Before
 its first request Hermes asked for Ollama's `POST /api/show`, which Splash
 answers 404; Hermes went on without it.
 
-**Not run yet:** Codex against Splash. Hermes and OpenCode use chat completions, the endpoint
+**Codex from the client machine** (`codex-local`, the client guide's setup,
+2026-10-18): it worked, in six requests over 3 min 44 s, at effort `medium`
+with 44 tools. A side request of 4,647 tokens ran alongside the first turn,
+18,600 tokens cold, which started writing after 134.8 s (about 138 tok/s,
+below the usual 180, probably for sharing the engine with the side request).
+Codex sends its encrypted reasoning back each turn, and turns 2-5 went
+through with their prompts cached, starting after 2-19 s.
+
+So all four clients work against Splash from the client machine, where
+TensorFold 0.6.6 refused Claude Code and Codex. Hermes and OpenCode use chat completions, the endpoint
 measured above. Splash's own launchers
 (`splash-m1 claude|codex|opencode|hermes|pi`) connect to a server on the same
 Mac only, so another machine configures each client by hand, as the client

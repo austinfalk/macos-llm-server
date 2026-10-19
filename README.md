@@ -344,7 +344,7 @@ the speed comparison measured on Splash. What was checked, on the Mac
 | Client | API it uses | Checked |
 |---|---|---|
 | Claude Code | Anthropic Messages | Its request shapes: a system message in mid-conversation, and a JSON-schema title request. Claude Code 2.x itself, through `splash-m1 claude` on the Mac and from another machine with the client guide's setup: answered, with tool calls and their results passed correctly |
-| Codex | Responses | Its request shapes: `include: ["reasoning.encrypted_content"]` with `store: false`, and a second turn that sends the output back. Codex itself: not run yet |
+| Codex | Responses | Its request shapes: `include: ["reasoning.encrypted_content"]` with `store: false`, and a second turn that sends the output back. Codex itself, from another machine: worked over six turns |
 | Hermes Agent, OpenCode, and other OpenAI chat-completions clients | `/v1/chat/completions` | The endpoint, in the speed comparison. Hermes and OpenCode from another machine: worked |
 
 Under Claude

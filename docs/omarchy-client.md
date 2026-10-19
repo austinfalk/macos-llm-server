@@ -45,17 +45,16 @@ Responses, and Anthropic Messages. Three facts shape every config below:
 
 ### What works today
 
-Splash 1.3.2-m1.1 with Qwen3.8-27B. Hermes, OpenCode and Claude Code were run from
-this machine against Splash on 2026-10-18, and Hermes and OpenCode against
-TensorFold 0.6 on 2026-10-03; Codex's requests were checked on the server on
-2026-10-18, against Splash:
+Splash 1.3.2-m1.1 with Qwen3.8-27B. All four were run from this machine against
+Splash on 2026-10-18; Hermes and OpenCode also worked against TensorFold 0.6
+on 2026-10-03:
 
 | Tool | Use it for | API | Status |
 |---|---|---|---|
 | **Hermes Agent** (desktop app and `hermes`) | General agent work: research, writing, running commands, long tasks you check on later | chat completions | **Works** against Splash (2026-10-18) and worked against TensorFold (step 5) |
 | **OpenCode** (`opencode`) | Coding in a repository, from the terminal | chat completions | **Works** against Splash (2026-10-18) and worked against TensorFold (step 6) |
 | Claude Code (`claude-local`) | Coding | Anthropic Messages | **Works** against Splash (2026-10-18; step 3) |
-| Codex (`codex-local`) | Coding | Responses | The API shapes work on the server; not yet run from this machine (step 4) |
+| Codex (`codex-local`) | Coding | Responses | **Works** against Splash (2026-10-18; step 4) |
 
 Any other tool that speaks OpenAI chat completions should work the same way:
 base URL `ENDPOINT/v1`, API key from step 2, model `local-model`.
@@ -142,9 +141,6 @@ Moving the server to a new release is a deliberate change: README, step 9,
 `scripts/lib.sh`, re-runs `1-install.sh` and restarts the server. Clients need
 no change. Report problems on M1 or M2 to the port's issues, not upstream
 Splash's *(the port's README)*.
-
-When a tool's check in steps 3 to 6 passes against Splash, record it in
-`docs/findings.md` and remove the step's "not yet run" note.
 
 ## 0. On the server's side, once (the user)
 
@@ -270,16 +266,13 @@ be much faster (the server caches the prompt).
 
 ## 4. Codex
 
-**Not yet run from this machine.** TensorFold refused every request
-(2026-10-03, TensorFold 0.6.5: HTTP 400, `include is not supported
-(reasoning.encrypted_content)`), and Codex sends that `include` on every
-Responses request, with no setting to stop it. Splash accepts it: on the
-server (2026-10-18), a Responses request with
-`include: ["reasoning.encrypted_content"]` and `store: false` got 200 with the
-encrypted reasoning, and so did a second turn that sent the output back. Codex
-itself has not been run against Splash. When testing, run Codex from a trusted
-directory (a git repo you have opened before) or its check stops before
-reaching the server.
+**Works against Splash** (2026-10-18, from this machine). TensorFold refused
+every request (2026-10-03, TensorFold 0.6.5: HTTP 400, `include is not
+supported (reasoning.encrypted_content)`), and Codex sends that `include` on
+every Responses request, with no setting to stop it. Splash accepts it and
+returns the encrypted reasoning, which Codex sends back each turn. Run Codex
+from a trusted directory (a git repo you have opened before) or its check
+stops before reaching the server.
 
 Omarchy ships `codex` as a launcher too. Codex needs the Responses API
 (`wire_api = "chat"` was removed), which the server has. It has no setting for
