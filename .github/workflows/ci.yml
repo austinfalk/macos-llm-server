@@ -1,0 +1,42 @@
+# Checks every pull request and every push to main: shellcheck on the scripts,
+# and a scan of tracked files for identifying details this repo must not carry.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A new push to a pull request cancels its outdated run; runs on main always
+# finish, so every merged commit is checked.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  ci:
+    name: CI
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The runner's preinstalled ShellCheck (0.9.0) reports notes that the
+      # 0.11.0 used on the maintainer's Mac does not, so CI installs 0.11.0
+      # pinned by checksum and runs the command AGENTS.md asks for.
+      - run: |
+          url=https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
+          curl -fsSLo "$RUNNER_TEMP/shellcheck.tar.xz" "$url"
+          echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  $RUNNER_TEMP/shellcheck.tar.xz" | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/shellcheck.tar.xz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/shellcheck-v0.11.0" >> "$GITHUB_PATH"
+      - run: |
+          shellcheck --version
+          shellcheck -x -s sh scripts/*.sh config/*.sh
+
+      - run: sh scripts/check-public.sh

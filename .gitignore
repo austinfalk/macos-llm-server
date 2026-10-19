@@ -13,3 +13,6 @@ id_*
 
 .DS_Store
 __pycache__/
+
+# Real host and tailnet names for scripts/check-public.sh, one word per line
+config/private-words
