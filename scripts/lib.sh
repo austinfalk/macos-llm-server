@@ -32,15 +32,11 @@ fi
 LLM_HOME=$(dscl . -read "/Users/$LLM_USER" NFSHomeDirectory 2>/dev/null | sed -n 's/^NFSHomeDirectory: //p')
 LLM_UID=$(id -u "$LLM_USER" 2>/dev/null)
 KEY_FILE=$LLM_HOME/.config/llm-server/api-key
-# Splash's port for M1 and M2 (upstream Splash runs on M3 and newer only),
-# from its release installer, pinned by version and checksum. The installer
-# keeps each version under SPLASH_HOME and points `current` and the
-# splash-m1 command at the newest.
-SPLASH_VERSION=1.3.2-m1.1
-SPLASH_INSTALLER_URL=https://github.com/paperniuk/splash/releases/download/$SPLASH_VERSION/install-m1.sh
-SPLASH_INSTALLER_SHA256=126ad31847498d1384090b73498ab14c59bed09140a37cd8d39cf804000a049e
-SPLASH_HOME="$LLM_HOME/Library/Application Support/Splash-M1"
-SPLASH_BIN=$BREW_PREFIX/bin/splash-m1
+# shellcheck source=scripts/variant.sh
+. "$LLM_REPO/scripts/variant.sh"
+CPU_BRAND=$(sysctl -n machdep.cpu.brand_string 2>/dev/null) || CPU_BRAND=
+SPLASH_VARIANT=$(detect_variant "$CPU_BRAND") || SPLASH_VARIANT=
+variant_values "$SPLASH_VARIANT"
 SPLASH_LABEL=com.llmserver.splash
 SPLASH_PLIST=$LLM_HOME/Library/LaunchAgents/$SPLASH_LABEL.plist
 SPLASH_LOG=$LLM_HOME/Library/Logs/llm-server/splash.log
@@ -128,6 +124,30 @@ start_job() {  # domain label plist
 	done
 	launchctl bootstrap "$1" "$3"   # once more, unmuted, to show the error
 	return 1
+}
+
+json_value() { printf '%s' "$1" | plutil -extract "$2" raw -o - - 2>/dev/null || :; }
+
+# Every bottle must match, not only one for this macOS: Homebrew pours a bottle
+# built for an earlier macOS when there is none for this one. Auto-update is off
+# for the install, so the tap cannot move after the check.
+install_upstream_splash() {
+	brew tap incoai/tap || die "could not add the Homebrew tap incoai/tap"
+	_json=$(brew info --json=v2 incoai/tap/splash) || die "could not read the formula incoai/tap/splash"
+	_version=$(json_value "$_json" formulae.0.versions.stable)
+	_archive=$(json_value "$_json" formulae.0.urls.stable.checksum)
+	_bottles=$(for _t in $(json_value "$_json" formulae.0.bottle.stable.files); do
+		json_value "$_json" "formulae.0.bottle.stable.files.$_t.sha256"
+	done | paste -s -d ' ' -)
+	[ "$_version $_archive $_bottles" = "$SPLASH_VERSION $SPLASH_ARCHIVE_SHA256 $SPLASH_BOTTLE_SHA256" ] \
+		|| die "incoai/tap/splash is not the Splash this repo pins:
+    version  ${_version:-none} (pinned $SPLASH_VERSION)
+    tarball  ${_archive:-none} (pinned $SPLASH_ARCHIVE_SHA256)
+    bottles  ${_bottles:-none} (pinned $SPLASH_BOTTLE_SHA256)
+Upstream moved. Read its release notes, then bump SPLASH_VERSION and the
+checksums in scripts/variant.sh."
+	HOMEBREW_NO_AUTO_UPDATE=1 brew install incoai/tap/splash || die "brew install incoai/tap/splash failed"
+	brew pin splash || die "could not pin splash in Homebrew"
 }
 
 # --- templates ----------------------------------------------------------------

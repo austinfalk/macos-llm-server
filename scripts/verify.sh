@@ -40,7 +40,6 @@ else
 fi
 
 step "Splash"
-expect "Splash version" "$(sudo -u "$LLM_USER" "$SPLASH_BIN" --version 2>/dev/null)" "Splash $SPLASH_VERSION"
 if job_loaded "gui/$LLM_UID/$SPLASH_LABEL"; then
 	pass "server $SPLASH_LABEL loaded in $LLM_USER's login session"
 elif [ "$(stat -f %Su /dev/console)" != "$LLM_USER" ]; then
@@ -48,14 +47,29 @@ elif [ "$(stat -f %Su /dev/console)" != "$LLM_USER" ]; then
 else
 	fail "server $SPLASH_LABEL is not loaded (re-run scripts/3-services.sh)"
 fi
-# The HTTP server and the engine it starts both run from SPLASH_HOME.
-users=$(ps -axo user=,command= | awk -v h="$SPLASH_HOME/" 'index($0, h) && !/awk/ {print $1}' | sort -u)
-if [ -z "$users" ]; then
-	fail "no Splash process"
-elif [ "$users" != "$LLM_USER" ]; then
-	fail "Splash runs as $(printf '%s' "$users" | tr '\n' ' '), not only $LLM_USER"
+if [ -z "$SPLASH_VARIANT" ]; then
+	fail "no Splash build runs on ${CPU_BRAND:-this chip}: see scripts/1-install.sh"
 else
-	pass "Splash runs as $LLM_USER, not root"
+	expect "Splash version ($SPLASH_VARIANT)" "$(sudo -u "$LLM_USER" "$SPLASH_BIN" --version 2>/dev/null)" "Splash $SPLASH_VERSION"
+	if [ "$SPLASH_VARIANT" = upstream ]; then
+		# Homebrew refuses root, and needs its user's home.
+		if sudo -H -u "$LLM_USER" "$BREW_PREFIX/bin/brew" list --pinned 2>/dev/null | grep -qx splash; then
+			pass "splash pinned in Homebrew"
+		else
+			fail "splash is not pinned in Homebrew, so brew upgrade would move it: run brew pin splash"
+		fi
+	fi
+	# The HTTP server and the engine it starts both run from SPLASH_RUN_DIR.
+	# ps may show it resolved: Homebrew's opt/splash links into the Cellar.
+	run_real=$(cd "$SPLASH_RUN_DIR" 2>/dev/null && pwd -P) || run_real=$SPLASH_RUN_DIR
+	users=$(ps -axo user=,command= | awk -v a="$SPLASH_RUN_DIR/" -v b="$run_real/" '(index($0, a) || index($0, b)) && !/awk/ {print $1}' | sort -u)
+	if [ -z "$users" ]; then
+		fail "no Splash process"
+	elif [ "$users" != "$LLM_USER" ]; then
+		fail "Splash runs as $(printf '%s' "$users" | tr '\n' ' '), not only $LLM_USER"
+	else
+		pass "Splash runs as $LLM_USER, not root"
+	fi
 fi
 expect "key file permissions" "$(stat -f %Sp:%Su "$KEY_FILE" 2>/dev/null)" "-rw-------:$LLM_USER"
 

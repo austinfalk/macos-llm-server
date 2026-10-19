@@ -13,15 +13,12 @@ check_user
 step "This machine"
 # hw.optional.arm64, not uname: a shell under Rosetta reports x86_64.
 [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ] || die "this guide needs Apple Silicon: Splash runs on its GPU and Neural Engine"
-case $(sysctl -n machdep.cpu.brand_string) in
-	"Apple M1"*|"Apple M2"*) ;;
-	*) die "this is $(sysctl -n machdep.cpu.brand_string): Splash's M1/M2 port is for M1 and M2 only. Use official Splash (brew install incoai/tap/splash)" ;;
-esac
+[ -n "$SPLASH_VARIANT" ] || die "this is ${CPU_BRAND:-a chip with no name}: Splash needs Apple Silicon, an M1 or later"
 os=$(sw_vers -productVersion)
 major=${os%%.*}; minor=$(printf '%s' "$os" | cut -d. -f2)
 [ "$major" -gt 26 ] || { [ "$major" -eq 26 ] && [ "${minor:-0}" -ge 4 ]; } || die "Splash needs macOS 26.4 or later; this Mac runs $os"
 command -v brew >/dev/null 2>&1 || die "Homebrew is not installed: https://brew.sh"
-ok "macOS $(sw_vers -productVersion), $(ram_gib) GiB unified memory, $(is_laptop && echo laptop || echo desktop)"
+ok "$CPU_BRAND (Splash variant: $SPLASH_VARIANT), macOS $(sw_vers -productVersion), $(ram_gib) GiB unified memory, $(is_laptop && echo laptop || echo desktop)"
 
 step "Conflicts"
 # This setup runs Homebrew's tailscaled. Tailscale documents that its own app
@@ -41,20 +38,27 @@ else
 	ok "$(brew list --versions tailscale) installed"
 fi
 
-# Splash's M1/M2 port ships as a release archive and an installer that checks
-# the archive's SHA-256. The installer is pinned here by its own checksum.
 if [ "$("$SPLASH_BIN" --version 2>/dev/null)" = "Splash $SPLASH_VERSION" ]; then
 	ok "Splash $SPLASH_VERSION ($SPLASH_BIN)"
 else
-	tmp=$(mktemp -d)
-	trap 'rm -rf "$tmp"' EXIT
-	curl -fsSL "$SPLASH_INSTALLER_URL" -o "$tmp/install-m1.sh" || die "could not download $SPLASH_INSTALLER_URL"
-	got=$(shasum -a 256 "$tmp/install-m1.sh" | awk '{print $1}')
-	[ "$got" = "$SPLASH_INSTALLER_SHA256" ] || die "install-m1.sh has SHA-256 $got, not the pinned $SPLASH_INSTALLER_SHA256"
-	SPLASH_M1_VERSION=$SPLASH_VERSION SPLASH_BIN_DIR=$(dirname "$SPLASH_BIN") sh "$tmp/install-m1.sh" >/dev/null \
-		|| die "the Splash installer failed"
+	case $SPLASH_VARIANT in
+		port)
+			# The port ships as a release archive and an installer that checks
+			# the archive's SHA-256.
+			tmp=$(mktemp -d)
+			trap 'rm -rf "$tmp"' EXIT
+			curl -fsSL "$SPLASH_INSTALLER_URL" -o "$tmp/install-m1.sh" || die "could not download $SPLASH_INSTALLER_URL"
+			got=$(shasum -a 256 "$tmp/install-m1.sh" | awk '{print $1}')
+			[ "$got" = "$SPLASH_INSTALLER_SHA256" ] || die "install-m1.sh has SHA-256 $got, not the pinned $SPLASH_INSTALLER_SHA256"
+			SPLASH_M1_VERSION=$SPLASH_VERSION SPLASH_BIN_DIR=$(dirname "$SPLASH_BIN") sh "$tmp/install-m1.sh" >/dev/null \
+				|| die "the Splash installer failed"
+			;;
+		upstream)
+			install_upstream_splash
+			;;
+	esac
 	[ "$("$SPLASH_BIN" --version 2>/dev/null)" = "Splash $SPLASH_VERSION" ] || die "$SPLASH_BIN does not run Splash $SPLASH_VERSION after installing"
-	ok "Splash $SPLASH_VERSION installed ($SPLASH_HOME)"
+	ok "Splash $SPLASH_VERSION installed ($SPLASH_BIN)"
 fi
 
 step "Hugging Face"
