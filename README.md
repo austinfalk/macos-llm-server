@@ -75,9 +75,7 @@ write faster, by itself.
 
 The default here is **Qwen3.8-27B** in MLX 4-bit,
 `mlx-community/Qwen3.8-27B-4bit`, the checkpoint the port's release notes name.
-Its weight files are byte for byte the ones this server ran under TensorFold
-([findings](docs/findings.md#the-server-splash-for-m1m2-and-qwen38-27b)). It
-scores 34 on the [Artificial Analysis Intelligence
+It scores 34 on the [Artificial Analysis Intelligence
 Index](https://artificialanalysis.ai/) v4.3.2, which changes over time, against
 18 for Qwen3.6-35B-A3B *(sourced)*. The 35B-A3B is a mixture of experts with 3B
 parameters active per token, so it writes faster: the port measured it at
@@ -335,10 +333,8 @@ comes back empty. **Tell clients the context window**, 262,144 tokens here, or
 less, so they compact before reaching it. `/v1/models` reports it as
 `context_length`.
 
-**Which tools work** (Splash 1.3.2-m1.1, Qwen3.8-27B). TensorFold 0.6.6 refused
-Claude Code's and Codex's requests, and Splash accepts them. Hermes and
-OpenCode use chat completions, which worked with TensorFold and is the endpoint
-the speed comparison measured on Splash. What was checked, on the Mac
+**Which tools work** (Splash 1.3.2-m1.1, Qwen3.8-27B). All four work. What
+was checked, on the Mac and from another machine
 ([findings](docs/findings.md#the-server-splash-for-m1m2-and-qwen38-27b)):
 
 | Client | API it uses | Checked |
@@ -439,34 +435,6 @@ left: models, key, logs, Splash itself, Tailscale, tailnet membership, power
 settings. Splash's data folder, `~/Library/Application Support/Splash`, stays
 too.
 
-### Moving from TensorFold
-
-Earlier versions of this guide ran TensorFold 0.6.6 as a `tensorfold service`
-named `local-model`, on the same port. To move a Mac from it and keep the key,
-so that clients need no change:
-
-1. Copy the key into the file Splash's LaunchAgent reads, before
-   `3-services.sh` makes a new one:
-
-   ```sh
-   ( umask 077; mkdir -p ~/.config/llm-server && sed -n 's/^clients: *//p' ~/.config/tensorfold/api-keys > ~/.config/llm-server/api-key )
-   ```
-
-2. Stop TensorFold: `tensorfold service stop local-model`. It stays stopped
-   until you start it again; `tensorfold service uninstall local-model --yes`
-   removes it.
-3. Run `sh scripts/1-install.sh`, then `sh scripts/3-services.sh`.
-   `3-services.sh` refuses to start Splash while anything else listens on the
-   port.
-4. Once you no longer need TensorFold, run `brew uninstall tensorfold@0.6`.
-
-The endpoint is down from step 2 until `3-services.sh` reports it ready: 2 min
-51 s on this guide's Mac, with the new model already downloaded. The model and
-its draft come from other repositories than TensorFold's, so otherwise the
-first start downloads them, about 19 GB. TensorFold's files stay in the
-Hugging Face cache until you delete them. Clients keep working with their
-144,384-token context, and can raise it to 262,144 (step 8).
-
 ---
 
 ## Troubleshooting
@@ -478,5 +446,5 @@ Hugging Face cache until you delete them. Clients keep working with their
 | `502` from the endpoint | Splash is not running: after a restart, nobody has logged in | Log in over Screen Sharing, then check its status (step 9) |
 | `503` `engine_recovering` | Splash's engine failed and is restarting; the message names the failure | Retry. If it fails three times soon after starting, Splash stops restarting it and answers `500` `engine_failed`: restart the server (step 9) and read the log |
 | Empty answers | The model spent the reply's output limit thinking | Allow 16K+ output tokens (step 8), and ask for `medium` reasoning effort |
-| `3-services.sh`: "something else listens on port 8080" | TensorFold from an earlier version of this guide, or another server | Moving from TensorFold (step 9) |
+| `3-services.sh`: "something else listens on port 8080" | Another server uses the port | Stop the process the message names, then re-run `3-services.sh` |
 | `Bootstrap failed: 5: Input/output error` | A launchd job was restarted too quickly | Re-run the script; it waits and retries |
