@@ -62,7 +62,8 @@ admits up to 32 requests at once, running or waiting, and answers 503 to more
 (`--queue-size`). It keeps the Mac awake while requests run, though the display
 may still sleep (`--allow-idle-sleep` turns that off). The port's
 `server/serve_options.py` gives the last two *(sourced)*.
-`sudo sh scripts/verify.sh` passed with 0 failures on these settings.
+`sudo sh scripts/verify.sh` passed with 0 failures on these settings
+(2026-10-18).
 
 **The checkpoint.** Inco's earlier `incoai/Qwen3.8-27B-Splash` packages no
 longer load since Splash 1.3.1, which stops and names the MLX model instead
@@ -106,9 +107,10 @@ request asks for thinking and names no `output_config.effort`, Splash gives it
 `high` (`server/api_shapes.py:683` in the port,
 `effort = _field(output_config, "effort", "high")`). The request then carries
 an effort, and `--default-reasoning-effort` applies only to a request without
-one (`server/frontend.py:833`). Qwen3.8's template rejects `high`, and Splash
-renders the alias `xhigh` instead (`server/chat_templates.py:92`,
-`REASONING_EFFORT_ALIASES = {"high": "xhigh", ...}`). This is read from the
+one (`server/frontend.py:833`). If Qwen3.8's template raises an error on
+`high`, Splash renders the alias `xhigh` instead (`render_chat_template` and
+`REASONING_EFFORT_ALIASES = {"high": "xhigh", ...}` in
+`server/chat_templates.py:92`); whether it does was not checked. This is read from the
 installed port, 1.3.2-m1.1, and was not measured. `claude-local` asks for
 `medium` itself with `CLAUDE_CODE_EFFORT_LEVEL`, and the client guide's step 7
 logged `effort medium` for it ([Clients](#clients)).
