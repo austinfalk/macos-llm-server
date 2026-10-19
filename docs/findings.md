@@ -143,8 +143,17 @@ permission prompts refused all but `whoami`, `pwd` and `ls`. The tool calls and
 their results passed correctly. So under Claude Code's prompt this model can
 ignore a trivial instruction.
 
-**Not run yet:** Codex, OpenCode and Hermes against Splash, and Claude Code
-from the client machine. Hermes and OpenCode use chat completions, the endpoint
+**OpenCode from the client machine** (1.18.34, its existing config
+unchanged, 2026-10-18): "summarize the readme" worked, with a complete answer.
+The first request after 13 idle minutes restored the weights in 5.8 s. The
+title request (569 tokens, effort `low`) ran alongside the first turn (8,528
+tokens cold, effort `medium`), which started writing after 56.0 s and made a
+tool call at 55.3 tok/s. The second turn read the README: 15,810 tokens, 8,512
+cached, first token after 40.6 s, then 512 tokens at 30.9 tok/s. From the
+question to the last token took 1 min 48 s.
+
+**Not run yet:** Codex and Hermes against Splash, and Claude Code from the
+client machine. Hermes and OpenCode use chat completions, the endpoint
 measured above. Splash's own launchers
 (`splash-m1 claude|codex|opencode|hermes|pi`) connect to a server on the same
 Mac only, so another machine configures each client by hand, as the client

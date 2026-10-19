@@ -45,14 +45,15 @@ Responses, and Anthropic Messages. Three facts shape every config below:
 
 ### What works today
 
-Splash 1.3.2-m1.1 with Qwen3.8-27B. Hermes and OpenCode were tested from this
-machine on 2026-10-03, against TensorFold 0.6; Claude Code's and Codex's
+Splash 1.3.2-m1.1 with Qwen3.8-27B. OpenCode was run from this machine against
+Splash on 2026-10-18, and Hermes and OpenCode against TensorFold 0.6 on
+2026-10-03; Claude Code's and Codex's
 requests were checked on the server on 2026-10-18, against Splash:
 
 | Tool | Use it for | API | Status |
 |---|---|---|---|
 | **Hermes Agent** (desktop app and `hermes`) | General agent work: research, writing, running commands, long tasks you check on later | chat completions | **Worked** against TensorFold; not yet run against Splash (step 5) |
-| **OpenCode** (`opencode`) | Coding in a repository, from the terminal | chat completions | **Worked** against TensorFold; not yet run against Splash (step 6) |
+| **OpenCode** (`opencode`) | Coding in a repository, from the terminal | chat completions | **Works** against Splash (2026-10-18) and worked against TensorFold (step 6) |
 | Claude Code (`claude-local`) | Coding | Anthropic Messages | The API shapes work on the server; not yet run from this machine (step 3) |
 | Codex (`codex-local`) | Coding | Responses | The API shapes work on the server; not yet run from this machine (step 4) |
 
