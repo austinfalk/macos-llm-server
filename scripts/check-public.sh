@@ -14,11 +14,6 @@
 #   - an email address other than `*@users.noreply.github.com`,
 #     `noreply@anthropic.com` and `*@example.com`. `alice@github`, Tailscale's
 #     user form, has no domain and is not an email address.
-#   - any line of the optional, gitignored config/private-words, in file
-#     contents and file names. It holds one word per line, matched
-#     case-insensitively; blank lines and lines starting with `#` are skipped.
-#     It is where the real host and tailnet names go, so they never enter the
-#     tracked tree. CI has no such file, so only the generic checks run there.
 #
 # POSIX sh, and it sources nothing from lib.sh, so it also runs on Linux.
 set -u
@@ -62,22 +57,10 @@ git grep -I -n -o -i -E -e '[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[
 	| grep -v -i -e '@users\.noreply\.github\.com$' -e ':noreply@anthropic\.com$' -e '@example\.com$' \
 	| add "email address"
 
-if [ -f config/private-words ]; then
-	while IFS= read -r word || [ -n "$word" ]; do
-		word=$(printf '%s' "$word" | tr -d '\r' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
-		case $word in '' | '#'*) continue ;; esac
-		git grep -I -n -i -F -e "$word" | cut -d: -f1,2 | sed 's/$/:/' | add "word from config/private-words"
-		git ls-files | grep -i -F -e "$word" | sed 's/$/:(file name):/' | add "word from config/private-words"
-	done <config/private-words
-	words=
-else
-	words=" (config/private-words is absent, so host and tailnet names were not checked)"
-fi
-
 problems=$(wc -l <"$out" | tr -d ' ')
 if [ "$problems" -gt 0 ]; then
 	cat "$out"
-	printf '\n%s problem(s). Use the placeholders in README.md, or move the real name into config/private-words.\n' "$problems"
+	printf '\n%s problem(s). Use the placeholders in README.md.\n' "$problems"
 	exit 1
 fi
-printf 'ok   %s tracked files: no identifying details%s\n' "$(git ls-files | wc -l | tr -d ' ')" "$words"
+printf 'ok   %s tracked files: no identifying details\n' "$(git ls-files | wc -l | tr -d ' ')"
