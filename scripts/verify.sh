@@ -39,27 +39,23 @@ else
 	pass "tailnet only (no Funnel)"
 fi
 
-step "TensorFold"
-pass "$(sudo -u "$LLM_USER" "$TF_BIN" --version 2>/dev/null || echo "tensorfold: not installed")"
-if job_loaded "gui/$LLM_UID/$TF_LABEL"; then
-	pass "service $LLM_SERVICE loaded in $LLM_USER's login session"
+step "Splash"
+pass "$(sudo -u "$LLM_USER" "$SPLASH_BIN" --version 2>/dev/null || echo "splash-m1: not installed")"
+if job_loaded "gui/$LLM_UID/$SPLASH_LABEL"; then
+	pass "server $SPLASH_LABEL loaded in $LLM_USER's login session"
 elif [ "$(stat -f %Su /dev/console)" != "$LLM_USER" ]; then
-	fail "service $LLM_SERVICE is not running: $LLM_USER is not logged in. Log in (over Screen Sharing), then re-run"
+	fail "server $SPLASH_LABEL is not running: $LLM_USER is not logged in. Log in (over Screen Sharing), then re-run"
 else
-	fail "service $LLM_SERVICE is not loaded (re-run scripts/3-services.sh)"
+	fail "server $SPLASH_LABEL is not loaded (re-run scripts/3-services.sh)"
 fi
-if [ -f "$TF_PLIST" ] && grep -q Cellar "$TF_PLIST"; then
-	fail "$TF_PLIST points into Homebrew's Cellar: brew upgrade would break it (re-run scripts/3-services.sh)"
-fi
-# The server is `python -m tensorfold serve ...`; its supervisor,
-# `-m tensorfold.control.runner`, must not count.
-server_user=$(ps -axo user=,command= | awk '/ -m tensorfold serve / && !/awk/ {print $1; exit}')
-if [ -z "$server_user" ]; then
-	fail "no TensorFold server process"
-elif [ "$server_user" = root ]; then
-	fail "the TensorFold server runs as root"
+# The HTTP server and the engine it starts both run from SPLASH_HOME.
+users=$(ps -axo user=,command= | awk -v h="$SPLASH_HOME/" 'index($0, h) && !/awk/ {print $1}' | sort -u)
+if [ -z "$users" ]; then
+	fail "no Splash process"
+elif [ "$users" != "$LLM_USER" ]; then
+	fail "Splash runs as $(printf '%s' "$users" | tr '\n' ' '), not only $LLM_USER"
 else
-	pass "server runs as $server_user, not root"
+	pass "Splash runs as $LLM_USER, not root"
 fi
 expect "key file permissions" "$(stat -f %Sp:%Su "$KEY_FILE" 2>/dev/null)" "-rw-------:$LLM_USER"
 
@@ -85,7 +81,7 @@ expect "with a wrong X-Api-Key" "$(code_hdr "X-Api-Key: wrong-key" "$EP/v1/model
 expect "with an empty X-Api-Key" "$(code_hdr "X-Api-Key;" "$EP/v1/models")" 401
 expect "metrics without a key" "$(http_code "$EP/metrics")" 401
 # With keys configured, /health stays open but says nothing else.
-expect "health without a key" "$(curl -s -m 10 "$EP/health")" '{"status": "ok"}'
+expect "health without a key" "$(curl -s -m 10 "$EP/health")" '{"status":"ok"}'
 expect "model ID clients see" \
 	"$(curl_hdr "Authorization: Bearer $KEY" -s -m 20 "$EP/v1/models" | plutil -extract data.0.id raw -o - - 2>/dev/null)" "$LLM_SERVICE"
 

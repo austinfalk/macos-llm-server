@@ -21,16 +21,10 @@ if tailscale serve status 2>/dev/null | grep -q "127.0.0.1:$LLM_PORT"; then
 		warn "could not stop tailscale serve: run 'tailscale serve --https=443 off'"
 	fi
 fi
-# TensorFold refuses root, and its service lives in the user's login session.
-# Decide by its files: `service status` errors when that session is absent.
-profile="$LLM_HOME/Library/Application Support/TensorFold/control/profiles/$LLM_SERVICE.json"
-if [ -f "$TF_PLIST" ] || [ -f "$profile" ]; then
-	if sudo -u "$LLM_USER" env HOME="$LLM_HOME" "$TF_BIN" service uninstall "$LLM_SERVICE" --yes >/dev/null 2>&1; then
-		ok "TensorFold service $LLM_SERVICE removed"
-	else
-		warn "could not remove the TensorFold service from here; it would start again at the next login."
-		warn "Logged in as $LLM_USER: tensorfold service uninstall $LLM_SERVICE --yes"
-	fi
+if [ -f "$SPLASH_PLIST" ]; then
+	stop_job "gui/$LLM_UID/$SPLASH_LABEL"
+	rm -f "$SPLASH_PLIST"
+	ok "Splash server $SPLASH_LABEL removed"
 fi
 
 step "Hardening"
@@ -66,8 +60,9 @@ cat <<LEFT
 == Left in place, on purpose
   models           ~/.cache/huggingface/hub    (hf cache delete, or delete the folder)
   API key          $KEY_FILE
-  logs             ~/Library/Logs/TensorFold, $LLM_LOGS
-  packages         brew uninstall $TF_FORMULA tailscale
+  logs             $SPLASH_LOG, $LLM_LOGS
+  Splash           $SPLASH_HOME, $SPLASH_BIN, $LLM_HOME/Library/Application Support/Splash
+  packages         brew uninstall tailscale
   tailnet          sudo tailscale logout
   power settings   pmset -g custom   (these are ordinary macOS settings)
   automatic login  stays off

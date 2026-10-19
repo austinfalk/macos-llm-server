@@ -12,9 +12,14 @@ check_user
 
 step "This machine"
 # hw.optional.arm64, not uname: a shell under Rosetta reports x86_64.
-[ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ] || die "this guide needs Apple Silicon: TensorFold runs on MLX, Apple's framework for its unified-memory GPU"
-# TensorFold's Homebrew formula needs macOS 14 (Sonoma).
-[ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ] || die "this guide needs macOS 14 or later"
+[ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ] || die "this guide needs Apple Silicon: Splash runs on its GPU and Neural Engine"
+case $(sysctl -n machdep.cpu.brand_string) in
+	"Apple M1"*|"Apple M2"*) ;;
+	*) die "this is $(sysctl -n machdep.cpu.brand_string): Splash's M1/M2 port is for M1 and M2 only. Use official Splash (brew install incoai/tap/splash)" ;;
+esac
+os=$(sw_vers -productVersion)
+major=${os%%.*}; minor=$(printf '%s' "$os" | cut -d. -f2)
+[ "$major" -gt 26 ] || { [ "$major" -eq 26 ] && [ "${minor:-0}" -ge 4 ]; } || die "Splash needs macOS 26.4 or later; this Mac runs $os"
 command -v brew >/dev/null 2>&1 || die "Homebrew is not installed: https://brew.sh"
 ok "macOS $(sw_vers -productVersion), $(ram_gib) GiB unified memory, $(is_laptop && echo laptop || echo desktop)"
 
@@ -29,32 +34,27 @@ fi
 ok "checked"
 
 step "Packages"
-# TensorFold's own tap is its documented Homebrew install. tensorfold@0.6 is its
-# Python line, which serves the recommended model; the formula builds a private
-# Python environment with the MLX versions TensorFold pins.
-for f in tailscale "$TF_FORMULA"; do
-	if brew list --formula "$f" >/dev/null 2>&1; then
-		ok "$(brew list --versions "$f")"
-	else
-		brew install "$f"
-		ok "$(brew list --versions "$f") installed"
-	fi
-done
-
-# Keg-only, so not on PATH by itself: link it so `tensorfold` in a shell runs
-# this version. The scripts call it by path either way.
-if readlink "$BREW_PREFIX/bin/tensorfold" 2>/dev/null | grep -q '/tensorfold@0.6/'; then
-	ok "the tensorfold command runs $TF_FORMULA"
-elif brew list --formula ashhart/tensorfold/tensorfold >/dev/null 2>&1; then
-	warn "ashhart/tensorfold/tensorfold (TensorFold's native engine) owns the tensorfold command."
-	warn "The scripts use $TF_BIN. For the shell: brew unlink tensorfold && brew link --force $TF_FORMULA"
-elif brew link --force "$TF_FORMULA" >/dev/null 2>&1; then
-	ok "linked: the tensorfold command runs $TF_FORMULA"
+if brew list --formula tailscale >/dev/null 2>&1; then
+	ok "$(brew list --versions tailscale)"
 else
-	# Linking loads the tap's other formula with the same command name, which
-	# Homebrew refuses while that formula is untrusted.
-	warn "could not link $TF_FORMULA, so the tensorfold command is not on PATH (the scripts do not need it)."
-	warn "For the shell: brew trust --formula ashhart/tensorfold/tensorfold && brew link --force $TF_FORMULA"
+	brew install tailscale
+	ok "$(brew list --versions tailscale) installed"
+fi
+
+# Splash's M1/M2 port ships as a release archive and an installer that checks
+# the archive's SHA-256. The installer is pinned here by its own checksum.
+if [ "$("$SPLASH_BIN" --version 2>/dev/null)" = "Splash $SPLASH_VERSION" ]; then
+	ok "Splash $SPLASH_VERSION ($SPLASH_BIN)"
+else
+	tmp=$(mktemp -d)
+	trap 'rm -rf "$tmp"' EXIT
+	curl -fsSL "$SPLASH_INSTALLER_URL" -o "$tmp/install-m1.sh" || die "could not download $SPLASH_INSTALLER_URL"
+	got=$(shasum -a 256 "$tmp/install-m1.sh" | awk '{print $1}')
+	[ "$got" = "$SPLASH_INSTALLER_SHA256" ] || die "install-m1.sh has SHA-256 $got, not the pinned $SPLASH_INSTALLER_SHA256"
+	SPLASH_M1_VERSION=$SPLASH_VERSION SPLASH_BIN_DIR=$(dirname "$SPLASH_BIN") sh "$tmp/install-m1.sh" >/dev/null \
+		|| die "the Splash installer failed"
+	[ "$("$SPLASH_BIN" --version 2>/dev/null)" = "Splash $SPLASH_VERSION" ] || die "$SPLASH_BIN does not run Splash $SPLASH_VERSION after installing"
+	ok "Splash $SPLASH_VERSION installed ($SPLASH_HOME)"
 fi
 
 step "Hugging Face"

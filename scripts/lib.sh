@@ -23,8 +23,7 @@ if [ -f "$LLM_REPO/config.env" ]; then
 	. "$LLM_REPO/config.env"
 fi
 : "${LLM_USER:=${SUDO_USER:-$(id -un)}}"
-: "${LLM_MODEL:=TensorFold/Qwen3.8-27B-MLX-4bit}"
-: "${LLM_DRAFTER:=z-lab/Qwen3.8-27B-DFlash2}"
+: "${LLM_MODEL:=mlx-community/Qwen3.8-27B-4bit}"
 : "${LLM_SERVICE:=local-model}"
 : "${LLM_PORT:=8080}"
 : "${LLM_TAG:=tag:llm-server}"
@@ -34,18 +33,19 @@ fi
 
 LLM_HOME=$(dscl . -read "/Users/$LLM_USER" NFSHomeDirectory 2>/dev/null | sed -n 's/^NFSHomeDirectory: //p')
 LLM_UID=$(id -u "$LLM_USER" 2>/dev/null)
-KEY_FILE=$LLM_HOME/.config/tensorfold/api-keys
-# TensorFold's Python line, which serves the recipes its native 1.0 engine does
-# not qualify yet (Qwen3.8-27B among them). The formula is keg-only, so the
-# scripts call it by path, through Homebrew's version-independent opt link: a
-# Cellar path is deleted by the next upgrade.
-TF_FORMULA=ashhart/tensorfold/tensorfold@0.6
-TF_PREFIX=$BREW_PREFIX/opt/tensorfold@0.6
-TF_BIN=$TF_PREFIX/bin/tensorfold
-TF_PYTHON=$TF_PREFIX/libexec/bin/python
-TF_LABEL=dev.tensorfold.$LLM_SERVICE
-TF_PLIST=$LLM_HOME/Library/LaunchAgents/$TF_LABEL.plist
-TF_LOG=$LLM_HOME/Library/Logs/TensorFold/$LLM_SERVICE/server.log
+KEY_FILE=$LLM_HOME/.config/llm-server/api-key
+# Splash's port for M1 and M2 (upstream Splash runs on M3 and newer only),
+# from its release installer, pinned by version and checksum. The installer
+# keeps each version under SPLASH_HOME and points `current` and the
+# splash-m1 command at the newest.
+SPLASH_VERSION=1.3.2-m1.1
+SPLASH_INSTALLER_URL=https://github.com/paperniuk/splash/releases/download/$SPLASH_VERSION/install-m1.sh
+SPLASH_INSTALLER_SHA256=126ad31847498d1384090b73498ab14c59bed09140a37cd8d39cf804000a049e
+SPLASH_HOME="$LLM_HOME/Library/Application Support/Splash-M1"
+SPLASH_BIN=$BREW_PREFIX/bin/splash-m1
+SPLASH_LABEL=com.llmserver.splash
+SPLASH_PLIST=$LLM_HOME/Library/LaunchAgents/$SPLASH_LABEL.plist
+SPLASH_LOG=$LLM_HOME/Library/Logs/llm-server/splash.log
 
 # Installed by 4-harden.sh. Services never point into this git checkout.
 LLM_SBIN=/usr/local/sbin
@@ -88,8 +88,7 @@ endpoint_url() {
 	_h=$(endpoint_host)
 	[ -n "$_h" ] && printf 'https://%s' "$_h"
 }
-# The key clients use: the "clients" line of the key file, without its label.
-key() { sed -n 's/^clients: *//p' "$KEY_FILE" 2>/dev/null | head -1; }
+key() { head -1 "$KEY_FILE" 2>/dev/null; }
 
 # curl_hdr HEADER CURL-ARGS...
 # The header, which usually carries the key, reaches curl on stdin rather than
@@ -141,6 +140,15 @@ render() {
 	[ -f "$_src" ] || die "missing template $_src"
 	( umask 077
 	  sed -e "s|@LLM_BATTERY_SHUTDOWN_PCT@|$LLM_BATTERY_SHUTDOWN_PCT|g" \
+	      -e "s|@LLM_MODEL@|$LLM_MODEL|g" \
+	      -e "s|@LLM_PORT@|$LLM_PORT|g" \
+	      -e "s|@LLM_SERVICE@|$LLM_SERVICE|g" \
+	      -e "s|@ENDPOINT_HOST@|${ENDPOINT_HOST:-}|g" \
+	      -e "s|@KEY_FILE@|$KEY_FILE|g" \
+	      -e "s|@SPLASH_BIN@|$SPLASH_BIN|g" \
+	      -e "s|@SPLASH_VERSION@|$SPLASH_VERSION|g" \
+	      -e "s|@SPLASH_LABEL@|$SPLASH_LABEL|g" \
+	      -e "s|@SPLASH_LOG@|$SPLASH_LOG|g" \
 	      "$_src" > "$_tmp" ) || die "could not render $1"
 	if grep -q '@[A-Z_]*@' "$_tmp"; then
 		_left=$(grep -o '@[A-Z_]*@' "$_tmp" | head -1)

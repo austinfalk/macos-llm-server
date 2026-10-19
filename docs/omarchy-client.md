@@ -1,14 +1,15 @@
 # Using the server from an Omarchy (Linux) machine
 
 How to connect an [Omarchy](https://omarchy.org) machine to the server, and
-how to get the most out of it: the tailnet, the key, Hermes Agent and OpenCode
-(which work today), Claude Code and Codex (ready for when TensorFold supports
-them), the Mac's desktop, and SSH. Written to be followed step by step, by a
-person or by a Claude Code session running in a clone of this repo on the
-Omarchy machine. Researched against Omarchy 4.0.4, Claude Code's current docs,
-Codex rust-v0.157.1, Hermes Agent 0.21.0 (as `hermes-desktop 2026.8.31-3`
-installs it) and OpenCode 1.18.34, with the server on TensorFold's Python line,
-0.6.5 and 0.6.6 (October 2026).
+how to get the most out of it: the tailnet, the key, Hermes Agent, OpenCode,
+Claude Code and Codex, the Mac's desktop, and SSH. Written to be followed step
+by step, by a person or by a Claude Code session running in a clone of this
+repo on the Omarchy machine. Researched against Omarchy 4.0.4, Claude Code's
+current docs, Codex rust-v0.157.1, Hermes Agent 0.21.0 (as
+`hermes-desktop 2026.8.31-3` installs it) and OpenCode 1.18.34, with the server
+on TensorFold's Python line, 0.6.5 and 0.6.6 (October 2026). The server has run
+Splash's M1/M2 port, 1.3.2-m1.1, since 2026-10-18; the steps below have not
+been run from this machine against it yet.
 
 **If you are Claude Code following this:** do one step at a time and run its
 check before the next. If a check fails, or a command, flag or config key does
@@ -20,20 +21,22 @@ needing `sudo` or a GUI, hand to the user.
 
 Throughout, `ENDPOINT` means `https://<machine>.<tailnet>.ts.net` — the server's
 address, which `tailscale status` lists once step 1 is done. The server runs
-[TensorFold](https://github.com/ashhart/TensorFold) with Qwen3.8-27B and its
-DFlash2 drafter, which clients know as **`local-model`**, with a
-**144,384-token context**: what the server reports at startup, the most one
-request can use in its memory budget while keeping the prompt cached for the
-next turn. Every API is under `ENDPOINT/v1`: OpenAI chat
-completions and Responses, and Anthropic Messages. Three facts shape every
-config below:
+[Splash](https://github.com/incoai/splash), through its M1/M2 port
+[paperniuk/splash](https://github.com/paperniuk/splash), with Qwen3.8-27B and
+its DFlash2 draft, which clients know as **`local-model`**. Its context is
+**262,144 tokens**, the model's native window, which `/v1/models` reports as
+`context_length`. The configs below give 144,384, the window TensorFold had;
+that still works, since a client may use less than the server allows. To use
+the whole window, change each 144384 below to 262144 (not yet tested from this
+machine). Every API is under `ENDPOINT/v1`: OpenAI chat completions and
+Responses, and Anthropic Messages. Three facts shape every config below:
 
 - **One model.** Every model setting, including background and helper models,
-  names `local-model`. The server answers any model name with the one it runs,
-  but naming it keeps each tool's records honest.
-- **Sampling is the server's.** TensorFold applies the model's own defaults
-  (temperature 1.0, top_k 20, top_p 0.95, as it reports at startup) to every
-  API when a request leaves them out, so these configs set none.
+  names `local-model`. Splash accepts that name and the model's repository ID,
+  and answers any other with 404 *(sourced: Splash's DEVELOPMENT.md, "API")*.
+- **Sampling is the server's.** Splash applies Qwen's defaults (temperature
+  1.0, top_p 0.95, top_k 20) to every API when a request leaves them out, so
+  these configs set none.
 - **Reasoning takes output.** The model thinks before answering, and the reply
   limit counts the thinking; allow 16K+ output tokens, and long timeouts. A
   reply cut off while still thinking comes back empty.
@@ -42,57 +45,63 @@ config below:
 
 ### What works today
 
-TensorFold 0.6 with Qwen3.8-27B, tested from this machine on 2026-10-03:
+Splash 1.3.2-m1.1 with Qwen3.8-27B. Hermes and OpenCode were tested from this
+machine on 2026-10-03, against TensorFold 0.6; Claude Code's and Codex's
+requests were checked on the server on 2026-10-18, against Splash:
 
 | Tool | Use it for | API | Status |
 |---|---|---|---|
-| **Hermes Agent** (desktop app and `hermes`) | General agent work: research, writing, running commands, long tasks you check on later | chat completions | **Works** (step 5) |
-| **OpenCode** (`opencode`) | Coding in a repository, from the terminal | chat completions | **Works** (step 6) |
-| Claude Code (`claude-local`) | Coding | Anthropic Messages | Refused by TensorFold with this model (step 3) |
-| Codex (`codex-local`) | Coding | Responses | Refused by TensorFold with any model (step 4) |
+| **Hermes Agent** (desktop app and `hermes`) | General agent work: research, writing, running commands, long tasks you check on later | chat completions | **Worked** against TensorFold; not yet run against Splash (step 5) |
+| **OpenCode** (`opencode`) | Coding in a repository, from the terminal | chat completions | **Worked** against TensorFold; not yet run against Splash (step 6) |
+| Claude Code (`claude-local`) | Coding | Anthropic Messages | The API shapes work on the server; not yet run from this machine (step 3) |
+| Codex (`codex-local`) | Coding | Responses | The API shapes work on the server; not yet run from this machine (step 4) |
 
 Any other tool that speaks OpenAI chat completions should work the same way:
 base URL `ENDPOINT/v1`, API key from step 2, model `local-model`.
 
-Why the two refusals, in short (details in `docs/findings.md`, "The
-server"):
-
-- **Claude Code** sends system messages in the middle of a conversation.
-  TensorFold's Anthropic endpoint keeps them where they are, which needs a
-  model whose chat template accepts them, and Qwen3.8's does not ("System
-  message must be at the beginning"). Its chat-completions endpoint turns them
-  into user messages instead, so Hermes and OpenCode never hit this.
-- **Codex** asks for encrypted reasoning on every request, which TensorFold
-  refuses ("include is not supported"). Codex has no setting to stop asking.
-
-Neither is a configuration mistake, and neither has a fix on this side short
-of hacking the requests, which this setup does not do.
+TensorFold refused Claude Code and Codex. Claude Code sends system messages in
+the middle of a conversation, which Qwen3.8's chat template rejects ("System
+message must be at the beginning"). Codex asks for encrypted reasoning on every
+request, which TensorFold refused ("include is not supported"). Splash accepts
+both: at startup it patches the template to render those system messages in
+place, and its Responses endpoint returns the encrypted reasoning Codex asks
+for. On the server, both tools' request shapes got 200, and Claude Code itself
+answered through Splash's own launcher there (`docs/findings.md`, "The
+server"). Splash's launchers (`splash-m1 claude`, `codex`, `opencode`,
+`hermes`) connect only to a server on the same Mac, so from this machine each
+tool is configured by hand, as below.
 
 ### Working well with it
 
-- **The first turn is the slow one.** The server reads a cold prompt at about
-  100 tokens a second — roughly 10 s per thousand tokens — and an agent's
-  first prompt is 10-15K tokens of instructions and tool definitions: expect
-  1½-2½ minutes before the first word. After that the server keeps the
-  conversation cached and reads only what is new: a follow-up took 5.7 s end
-  to end.
+- **The first turn is the slow one.** The server reads a cold prompt at
+  150-185 tokens a second, about 6 s per thousand tokens, and an agent's first
+  prompt is 10-20K tokens of instructions and tool definitions: expect one to
+  two minutes before the first word. On the server, a 12,107-token prompt took
+  67.9 s, and Claude Code's 21,200 tokens 114.5 s. After that the server keeps
+  the conversation cached and reads only what is new: cached follow-ups started
+  in 1-2 s.
 - **So keep conversations going.** One long session is much faster than many
   short ones. A new session, a changed system prompt, a different set of tools
   or skills, or editing an earlier message all make the server read from the
   first change onward.
+- **After 10 idle minutes the model leaves memory.** The next request waits
+  about 6 s more while Splash restores it.
 - **Fewer tools, faster starts.** Every MCP server and tool adds its
   definition to every prompt. Turn off what a session does not need.
-- **Writing runs at 15-20 tokens a second**, faster on code, where the draft
-  model guesses well. A long answer with long thinking takes minutes. Hand it
-  tasks you can walk away from rather than ones you watch line by line.
+- **Writing runs at 23-38 tokens a second**, slower as a conversation grows.
+  Thinking is prose, where the draft model guesses fewer tokens than on code,
+  so code requests write at about the same rate here (`docs/findings.md`). A
+  long answer with long thinking takes minutes. Hand it tasks you can walk away
+  from rather than ones you watch line by line.
 - **Choose how hard it thinks.** Most of a long turn is the model thinking
   (one step today thought for 11,777 tokens, 26 minutes). Qwen3.8's template
   knows three reasoning efforts: `low` ("keep your thinking brief"),
   `medium`, and `xhigh`, its default, which tells it to "think carefully ...
   validate key assumptions, consider plausible alternatives". The configs
   below ask for **`medium`** instead; in OpenCode, Ctrl+T switches per job
-  (`opencode run --variant low|medium|high`), and TensorFold hears `high` as
-  `xhigh`. Others' tests *(sourced, not run here)*: on agentic questions about
+  (`opencode run --variant low|medium|high`), and Splash renders `high` as
+  `xhigh`, which the template takes in its place *(sourced)*. Others' tests
+  *(sourced, not run here)*: on agentic questions about
   a codebase, `medium` scored 8.18 against `xhigh`'s 8.61 in about half the
   time (76 s against 143 s median), and `low` was both worse and slower, its
   shorter thinking costing extra agent rounds (Kodesage, 45 questions, one
@@ -100,54 +109,48 @@ of hacking the requests, which this setup does not do.
   `medium`'s 22 min, with no clear quality winner (Jose Romero). And at
   `xhigh` about 19% of calls came back empty after thinking, none at `medium`
   or `low` (QwenLM/Qwen3.8 #216, on vLLM and llama.cpp). The server itself
-  stays at the template's default: TensorFold's `--reasoning-effort` flag
+  stays at the template's default: Splash's `--default-reasoning-effort` flag
   would set one for every client, but this setup keeps the server stock. To
-  see what a request got, each line of the server's log carries `effort=`
-  (`None` means the template's `xhigh`).
-- **One agent at a time.** The server can run up to 8 requests together, but
+  see what a request got, each request's `Started` line in the server's log
+  shows the effort it sent, or `absent` and the default it took *(sourced)*.
+- **One agent at a time.** Splash batches requests that arrive together, but
   they share the GPU: two agents slow each other down, and a long prompt from
   one slows the other's reply while it is read. Background tasks (titles,
   summaries) count too. The configs
   below send helper tasks to the same model or turn them off.
-- **The window is 144,384 tokens.** Each tool is told so below and compacts
-  (summarises older turns) before reaching it.
+- **The window is 262,144 tokens.** Each tool is told 144,384 below, which it
+  compacts (summarises older turns) before reaching; raising it is optional.
 - **After the Mac restarts, the server is down until you log in.** Requests get
   `502`. Connect with Remmina (step 7) and log in at the login window; the
-  model server starts with your session and takes a few minutes to load. Over
-  SSH, `tensorfold service status local-model` says when it is up.
+  model server starts with your session and takes a minute or two to load.
+  Over SSH, `curl -s -o /dev/null -w '%{http_code}\n' 127.0.0.1:8080/ready`
+  prints 200 when it is up.
 - **Watching it work.** On the server,
-  `tail -f ~/Library/Logs/TensorFold/local-model/server.log` shows each request
-  as it finishes: prompt size, how much came from the cache, time to the first
-  token, and speed. It never logs prompt text.
+  `tail -f ~/Library/Logs/llm-server/splash.log` shows a `Started` line for
+  each request, with its prompt size, the cached part and its reasoning
+  effort, and a `Done` line when it finishes, with what the draft yielded per
+  cycle *(sourced)*.
 
-### When TensorFold updates
+### When Splash updates
 
-TensorFold releases often; each release's notes are in its
-[changelog](https://github.com/ashhart/TensorFold/blob/main/CHANGELOG.md). On
-the server: `brew upgrade tensorfold@0.6 && tensorfold service restart local-model`.
-Then look for:
+The server runs a pinned release of
+[paperniuk/splash](https://github.com/paperniuk/splash/releases), the port for
+M1 and M2. Watch its releases page; each release's notes say what changed.
+Moving the server to a new release is a deliberate change: README, step 9,
+"Update Splash", which bumps the pinned version and checksum in
+`scripts/lib.sh`, re-runs `1-install.sh` and restarts the server. Clients need
+no change. Report problems on M1 or M2 to the port's issues, not upstream
+Splash's *(the port's README)*.
 
-- **For Claude Code:** the Anthropic Messages endpoint accepting
-  mid-conversation system messages for models whose templates cannot keep them
-  (for example, rendering them as user messages, as its chat endpoint does).
-- **For Codex:** the Responses endpoint accepting or ignoring
-  `include: ["reasoning.encrypted_content"]`.
-
-Claude Code may need one more thing: its title requests use TensorFold's
-`[grammar]` extra (xgrammar), which the Homebrew formula does not install
-(`docs/findings.md`). If its check fails once system messages are accepted,
-look there next.
-
-Either change makes that tool work with no change here: its setup (steps 3 and 4)
-is in place. Test with the step's check, and if it passes, record it in
-`docs/findings.md` and remove the step's "not working" note.
+When a tool's check in steps 3 to 6 passes against Splash, record it in
+`docs/findings.md` and remove the step's "not yet run" note.
 
 ## 0. On the server's side, once (the user)
 
 1. **Put the API key in 1Password** as an *API Credential* item, `LLM server
    API key`, in the Private vault — so its secret reference is
-   `op://Private/LLM server API key/credential`. The key is the `clients:` line of
-   `~/.config/tensorfold/api-keys` on the server, without the label. Create it
+   `op://Private/LLM server API key/credential`. The key is the one line of
+   `~/.config/llm-server/api-key` on the server, without its newline. Create it
    with `op item create` reading the item from stdin, so the key never reaches
    a command line.
 2. **Tailnet policy.** Paste the current `config/tailscale-policy.hujson` (with
@@ -196,12 +199,13 @@ Expected: `"id": "local-model"`. Without the key,
 
 ## 3. Claude Code, beside your normal login
 
-**Not working with this server's model yet** (2026-10-03, Claude Code 2.1.288,
-TensorFold 0.6.5): every request fails at once with HTTP 400, `the model's chat
-template does not support mid-conversation system messages`. Qwen3.8's template
-accepts a system message only at the start; see "How to use this server" and
-"When TensorFold updates" above. Set it up anyway if you like — it is ready for
-that update — but use Hermes or OpenCode for now.
+**Not yet run from this machine.** TensorFold refused every request
+(2026-10-03, Claude Code 2.1.288, TensorFold 0.6.5: HTTP 400, `the model's chat
+template does not support mid-conversation system messages`). Splash renders
+those messages in place, and on the server (2026-10-18) Claude Code's request
+shapes got 200 and Claude Code 2.x answered through Splash's own launcher; see
+"How to use this server" above. Run this step's check, and if it passes,
+record it in `docs/findings.md` and remove this note.
 
 Omarchy ships `claude` as a launcher that installs on first run. Keep your
 normal Anthropic login as plain `claude`, and add `claude-local`, which uses a
@@ -240,12 +244,13 @@ exec claude "$@"
 }
 ```
 
-Why each: every model alias and subagents point at the one model.
+Why each: every model alias and subagents point at the one model, because
+Splash answers any other model name with 404.
 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` is Claude Code's documented way to tell it a
-custom model's real window, so it compacts before the server's 144,384 tokens
-rather than failing past it
-([docs](https://code.claude.com/docs/en/model-config)). Timeouts are long because
-reading a large prompt takes minutes.
+custom model's real window, so it compacts before the limit rather than
+failing past it ([docs](https://code.claude.com/docs/en/model-config)). 144384
+is TensorFold's window and still works; 262144 uses all of Splash's. Timeouts
+are long because reading a large prompt takes minutes.
 
 **Check:**
 
@@ -254,21 +259,27 @@ claude-local -p "Reply with the single word OK."    # OK, after thinking
 claude -p "Reply with the single word OK."          # still your Anthropic account
 ```
 
-On the server, `tail ~/Library/Logs/TensorFold/local-model/server.log` shows
-each request's path and the key's label (`key=clients`), never prompt text. Then
-use it interactively on a real
-task and watch the first turn: Claude Code's opening prompt is large, so the
-first reply takes a minute or more; later turns should be much faster (the
-server caches the prompt).
+On the server, `tail ~/Library/Logs/llm-server/splash.log` shows each request's
+`Started` and `Done` lines. Expect the first reply to take about two minutes:
+Claude Code's first request is about 21,200 tokens (its system prompt and 22
+tools), which the server read cold in 114.5 s. On the server, a first attempt
+at this check went off task: the model explored the machine with tool calls
+instead of answering, until it was stopped. If that happens, stop it and run
+the check again. Then use it interactively on a real task; later turns should
+be much faster (the server caches the prompt).
 
 ## 4. Codex
 
-**Not working with TensorFold yet** (2026-10-03, TensorFold 0.6.5): every
-request fails at once with HTTP 400, `include is not supported
-(reasoning.encrypted_content)`. Codex sends that on every Responses request,
-with no setting to stop it, so this holds for any model; see "When TensorFold
-updates" above. When testing, run Codex from a trusted directory (a git repo
-you have opened before) or its check stops before reaching the server.
+**Not yet run from this machine.** TensorFold refused every request
+(2026-10-03, TensorFold 0.6.5: HTTP 400, `include is not supported
+(reasoning.encrypted_content)`), and Codex sends that `include` on every
+Responses request, with no setting to stop it. Splash accepts it: on the
+server (2026-10-18), a Responses request with
+`include: ["reasoning.encrypted_content"]` and `store: false` got 200 with the
+encrypted reasoning, and so did a second turn that sent the output back. Codex
+itself has not been run against Splash. When testing, run Codex from a trusted
+directory (a git repo you have opened before) or its check stops before
+reaching the server.
 
 Omarchy ships `codex` as a launcher too. Codex needs the Responses API
 (`wire_api = "chat"` was removed), which the server has. It has no setting for
@@ -381,8 +392,8 @@ Why each, checked against the 0.21.0 source:
   `agent.reasoning_effort` (and `/reasoning`, `--reasoning`) but sends it only
   to providers it knows (Nous Portal, OpenRouter, GitHub Models, LM Studio,
   Ollama Cloud, Vercel); for any other endpoint
-  `_supports_reasoning_extra_body()` in `run_agent.py` returns false, and the
-  server logged `effort=None`. A custom provider's `extra_body` is merged into
+  `_supports_reasoning_extra_body()` in `run_agent.py` returns false, and
+  TensorFold logged `effort=None`. A custom provider's `extra_body` is merged into
   every request (`agent/agent_init.py`), background reviews included; each
   helper task takes its own. So Hermes cannot switch effort per job: for
   `xhigh`, add a second provider for the same server with
@@ -408,10 +419,10 @@ sqlite3 ~/.hermes/state.db \
 ```
 
 Every row should show `ENDPOINT/v1`, and on the server
-`grep 'done req' ~/Library/Logs/TensorFold/local-model/server.log | tail -1`
-(over SSH, step 8) should show `effort=medium`. Measured on the Omarchy
-machine (2026-10-03): 2 min 11 s for the check, a 13,532-token prompt read
-from cold.
+`grep Started ~/Library/Logs/llm-server/splash.log | tail -1`
+(over SSH, step 8) should show the effort `medium`. Measured on the Omarchy
+machine against TensorFold (2026-10-03): 2 min 11 s for the check, a
+13,532-token prompt read from cold.
 Then open Hermes from the app menu, send a message, and ask for a harmless
 command that needs approval: the approval prompt must appear in the app.
 
@@ -433,7 +444,7 @@ command that needs approval: the approval prompt must appear in the app.
       },
       "models": {
         "local-model": {
-          "name": "Qwen3.8 27B (TensorFold)",
+          "name": "Qwen3.8 27B (Splash)",
           "limit": {"context": 144384, "output": 16384},
           "reasoning": true,
           "options": {"reasoningEffort": "medium"}
@@ -464,13 +475,14 @@ Why each, checked against OpenCode 1.18.34's config schema:
 
 - `chunkTimeout` is the longest OpenCode waits between pieces of a streamed
   reply, 5 minutes by default, after which it drops the request (in testing,
-  it then sent the request again). TensorFold sends nothing while it reads a
-  prompt, so any step with more than 5 minutes of new text to read is dropped,
-  and the retry starts over. In a long session that happened three times in
-  one answer (`docs/findings.md`). 30 minutes matches the other tools'
-  timeouts. `headerTimeout` does not matter here (TensorFold answers at once),
-  and `timeout`, on the whole request, has no default in the schema (a
-  26-minute request was not cut off).
+  it then sent the request again). TensorFold sent nothing while it read a
+  prompt, so any step with more than 5 minutes of new text to read was
+  dropped, and the retry started over. In a long session that happened three
+  times in one answer (`docs/findings.md`). Splash reads faster, but whether it
+  sends anything while it reads has not been checked. 30 minutes matches the
+  other tools' timeouts. `headerTimeout` did not matter with TensorFold, which
+  answered at once, and `timeout`, on the whole request, has no default in the
+  schema (a 26-minute request was not cut off).
 - `permission`: OpenCode allows most tools by default, so the model runs
   commands and edits files without asking; in testing it ran commands in the
   `plan` agent too. These rules ask first, except for a few read-only
@@ -480,13 +492,13 @@ Why each, checked against OpenCode 1.18.34's config schema:
 - `reasoning: true` and `options.reasoningEffort`: OpenCode builds **low /
   medium / high** variants for a reasoning model on an OpenAI-compatible
   provider, and **Ctrl+T** (`variant_cycle`) switches between them
-  (`--variant` for `opencode run`); TensorFold hears `high` as `xhigh`. With
+  (`--variant` for `opencode run`); Splash renders `high` as `xhigh`. With
   no variant chosen the model's `options` apply: `medium` ("How to use this
   server"); without them OpenCode sends no effort and the template's `xhigh`
   applies. (1.18.34's source: `provider/transform.ts`,
-  `session/llm/request.ts`.) Tested 2026-10-03: the default gave
-  `effort=medium`, `--variant low` gave `effort=low` for the reply and the
-  session title alike, and with no `options`, `effort=None`.
+  `session/llm/request.ts`.) Tested 2026-10-03, in TensorFold's log: the
+  default gave `effort=medium`, `--variant low` gave `effort=low` for the reply
+  and the session title alike, and with no `options`, `effort=None`.
 - `webfetch: ask`: OpenCode's fetch tool is always available and allowed by
   default (every agent starts from `"*": "allow"` in 1.18.34's source), so the
   model could request any URL — and put what it has read into the request —
@@ -496,11 +508,12 @@ Why each, checked against OpenCode 1.18.34's config schema:
 
 **Check:** `opencode run "Reply with the single word OK."`, then
 `opencode run -c "Now reply with the single word YES."`. On the server,
-`grep 'done req' ~/Library/Logs/TensorFold/local-model/server.log | tail -3`
-should show `effort=medium`, and after `opencode run --variant low ...`,
-`effort=low`. `opencode run` exits once the reply is in, so a title request
+`grep Started ~/Library/Logs/llm-server/splash.log | tail -3`
+should show the effort `medium`, and after `opencode run --variant low ...`,
+`low`. `opencode run` exits once the reply is in, so a title request
 still thinking may be dropped (it happened at `xhigh`; harmless).
-Measured on the Omarchy machine (2026-10-03): 1 min 48 s for the first (a
+Measured on the Omarchy machine against TensorFold (2026-10-03): 1 min 48 s
+for the first (a
 10,758-token prompt, read from cold) and 5.7 s end to end for the follow-up,
 whose prompt the server read almost entirely from its cache (1.5 s).
 
@@ -718,7 +731,7 @@ Connect with one or the other, not both at once (untested together).
 ## 8. SSH to the server (optional)
 
 Nothing above needs a shell on the server — the key comes from 1Password —
-but SSH is the way to administer it from here (logs, `tensorfold service`,
+but SSH is the way to administer it from here (logs, `launchctl`,
 `verify.sh`)
 without the desktop. The server accepts SSH keys only, and only from the
 tailnet; the key is the one in its `~/.ssh/authorized_keys`, kept in
@@ -759,12 +772,13 @@ leaves 1Password.
    `<machine>.<tailnet>.ts.net`), accept the fingerprint you just checked, and
    approve the key in 1Password.
 
-**Check:** `ssh <machine> 'sw_vers -productVersion; /opt/homebrew/opt/tensorfold@0.6/bin/tensorfold service status local-model'`
-prints the macOS version and the model service's state. A command run this way
-gets no login shell, so Homebrew's tools are not on its `PATH`: interactively
-(`ssh <machine>`) `tensorfold` works; in a one-off command, use its full path.
-The service lives in your GUI login, so it runs only while you are logged in on
-the Mac; after a restart, log in through Remmina (step 7) first.
+**Check:** `ssh <machine> 'sw_vers -productVersion; /opt/homebrew/bin/splash-m1 --version; curl -s -o /dev/null -w "%{http_code}\n" 127.0.0.1:8080/ready'`
+prints the macOS version, Splash's version, and 200 when the model server is
+ready. A command run this way gets no login shell, so Homebrew's tools are not
+on its `PATH`: interactively (`ssh <machine>`) `splash-m1` works; in a one-off
+command, use its full path. The server lives in your GUI login, so it runs only
+while you are logged in on the Mac; after a restart, log in through Remmina
+(step 7) first.
 
 ## 9. Report
 

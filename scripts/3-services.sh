@@ -1,12 +1,12 @@
 #!/bin/sh
-# README step 5: serve the model with TensorFold, behind an API key, on the
+# README step 5: serve the model with Splash, behind an API key, on the
 # tailnet.
-# Run as yourself: TensorFold's service lives in your login session and refuses
-# root.
+# Run as yourself: Splash runs in your login session, where macOS gives it the
+# GPU and the Neural Engine.
 #
 #     sh scripts/3-services.sh
 #
-# Safe to re-run: it reinstalls the service only when its settings differ, and
+# Safe to re-run: it restarts the server only when its settings differ, and
 # checks the endpoint again.
 set -eu
 LLM_REPO=$(cd "$(dirname "$0")/.." && pwd)
@@ -14,86 +14,70 @@ LLM_REPO=$(cd "$(dirname "$0")/.." && pwd)
 . "$LLM_REPO/scripts/lib.sh"
 need_user
 check_user
-[ "$(id -un)" = "$LLM_USER" ] || die "run this as $LLM_USER (LLM_USER), who owns the service"
+[ "$(id -un)" = "$LLM_USER" ] || die "run this as $LLM_USER (LLM_USER), who owns the server"
 
 step "Prerequisites"
-[ -x "$TF_BIN" ] || die "TensorFold ($TF_FORMULA) is not installed: run scripts/1-install.sh"
-[ -x "$TF_PYTHON" ] || die "$TF_PYTHON is missing: reinstall with brew reinstall $TF_FORMULA"
+[ -x "$SPLASH_BIN" ] || die "Splash is not installed: run scripts/1-install.sh"
+version=$("$SPLASH_BIN" --version 2>/dev/null) || version=
+[ "$version" = "Splash $SPLASH_VERSION" ] || die "$SPLASH_BIN is '$version', not Splash $SPLASH_VERSION: run scripts/1-install.sh"
 EP=$(endpoint_url) || EP=
 [ -n "$EP" ] || die "Tailscale is not up: run sudo sh scripts/2-tailscale.sh"
 tailscale status --json | plutil -extract CertDomains.0 raw -o - - >/dev/null 2>&1 \
 	|| die "HTTPS certificates are off for this tailnet: see scripts/2-tailscale.sh"
-ok "$("$TF_BIN" --version); endpoint will be $EP"
+ENDPOINT_HOST=$(endpoint_host)
+ok "$version; endpoint will be $EP"
 
 step "API key"
-# TensorFold's key file: one "label: key" a line, mode 0600 or it refuses to
-# start. The "clients" key is the one every client uses.
+new_key=no
 if [ ! -s "$KEY_FILE" ]; then
+	new_key=yes
 	mkdir -p "$(dirname "$KEY_FILE")"
-	( umask 077; printf 'clients: %s\n' "$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 48)" >"$KEY_FILE" )
+	( umask 077; LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 48 >"$KEY_FILE"; echo >>"$KEY_FILE" )
 	ok "generated $KEY_FILE"
 else
 	ok "using existing $KEY_FILE"
 fi
 chmod 600 "$KEY_FILE"
 key | grep -Eqx '[A-Za-z0-9]{32,}' \
-	|| die "$KEY_FILE has no 'clients: <key>' line of 32+ letters and digits. Delete it and re-run to make a new one."
+	|| die "$KEY_FILE does not hold a key of 32+ letters and digits. Delete it and re-run to make a new one."
 
-step "Model"
-# `pull` returns at once when the files are already in the Hugging Face cache.
-# TensorFold uses the recipe's drafter automatically once it is there. The
-# first download is about 20 GB.
-if ! pulled=$("$TF_BIN" pull "$LLM_MODEL" ${LLM_DRAFTER:+"$LLM_DRAFTER"} 2>&1); then
-	printf '%s\n' "$pulled" | grep -v -e 'Fetching' -e '^$' | tail -10 | sed 's/^/        /'
-	die "the download failed; nothing was changed. Re-run this when the network is back"
-fi
-printf '%s\n' "$pulled" | grep -v -e 'Fetching' -e '^$' | sed 's/^/        /'
-ok "$LLM_MODEL${LLM_DRAFTER:+ with $LLM_DRAFTER}"
-
-step "Service"
-# Everything not named here is TensorFold's default: context, drafting,
-# thinking, sampling, concurrency.
-profile="$LLM_HOME/Library/Application Support/TensorFold/control/profiles/$LLM_SERVICE.json"
-same=no
-if [ -f "$profile" ]; then
-	field() { plutil -extract "$1" raw -o - "$profile" 2>/dev/null; }
-	want=$(printf '%s|' "$LLM_MODEL" "$LLM_PORT" "$KEY_FILE" "$TF_PYTHON" 127.0.0.1 false 2)
-	have=$(printf '%s|' "$(field model)" "$(field port)" "$(field api_key_file)" "$(field python)" \
-		"$(field host)" "$(field allow_network)" "$(field args)")
-	[ "$want" = "$have" ] && same=yes
-fi
-if [ $same = yes ]; then
-	ok "$LLM_SERVICE already installed with these settings"
-	"$TF_BIN" service status "$LLM_SERVICE" 2>/dev/null | grep -q 'state: running' \
-		|| "$TF_BIN" service start "$LLM_SERVICE" >/dev/null \
-		|| die "the service did not start. See: $TF_BIN service doctor $LLM_SERVICE"
+step "Server"
+# Everything not named in the plist is Splash's default: context, memory,
+# draft, KV format, Neural Engine prefill, sampling, reasoning.
+mkdir -p "$(dirname "$SPLASH_PLIST")" "$(dirname "$SPLASH_LOG")"
+new=$SPLASH_PLIST.new.$$
+render com.llmserver.splash.plist "$new" 600 "$LLM_USER:staff"
+# Splash reads the key once, at start, so a new key needs a restart too.
+if [ $new_key = no ] && [ -f "$SPLASH_PLIST" ] && cmp -s "$new" "$SPLASH_PLIST" && job_loaded "gui/$LLM_UID/$SPLASH_LABEL"; then
+	rm -f "$new"
+	ok "already running with these settings"
 else
-	if [ -f "$profile" ]; then
-		"$TF_BIN" service stop "$LLM_SERVICE" >/dev/null 2>&1 || true
-		info "stopped $LLM_SERVICE to reinstall it with new settings: the endpoint is down until it is back"
+	if lsof -nP -iTCP:"$LLM_PORT" -sTCP:LISTEN >/dev/null 2>&1 && ! job_loaded "gui/$LLM_UID/$SPLASH_LABEL"; then
+		rm -f "$new"
+		die "something else listens on port $LLM_PORT: $(lsof -nP -iTCP:"$LLM_PORT" -sTCP:LISTEN | awk 'NR == 2 {print $1, "pid", $2}')
+       If it is TensorFold from an earlier version of this guide: README, \"Moving from TensorFold\"."
 	fi
-	"$TF_BIN" service install "$LLM_MODEL" --name "$LLM_SERVICE" --port "$LLM_PORT" \
-		--api-key-file "$KEY_FILE" --python "$TF_PYTHON" --replace >/dev/null \
-		|| die "the service install failed, and the service is stopped. See: $TF_BIN service doctor $LLM_SERVICE
-       To bring the previous settings back: $TF_BIN service start $LLM_SERVICE"
-	"$TF_BIN" service start "$LLM_SERVICE" >/dev/null \
-		|| die "the service did not start, so the endpoint is down. See: $TF_BIN service doctor $LLM_SERVICE"
-	ok "installed $LLM_SERVICE and started it"
+	job_loaded "gui/$LLM_UID/$SPLASH_LABEL" && info "restarting with new settings: the endpoint is down until it is back"
+	mv -f "$new" "$SPLASH_PLIST"
+	start_job "gui/$LLM_UID" "$SPLASH_LABEL" "$SPLASH_PLIST" \
+		|| die "the server did not start, so the endpoint is down. See: $SPLASH_LOG"
+	ok "started $SPLASH_LABEL"
 fi
-grep -q Cellar "$TF_PLIST" && die "$TF_PLIST points into Homebrew's Cellar, which brew upgrade deletes"
 
-# Loading a 27B model and measuring this Mac's kernels takes a few minutes.
-info "waiting for the model to load (a few minutes)"
+# The first start downloads the model and its draft (about 20 GB), prepares
+# the weights and times the Neural Engine against the GPU; later starts take
+# a minute or two.
+info "waiting for the model (the first start can take half an hour)"
 n=0
-until curl -s -m 5 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null | grep -q '"ok"'; do
+until curl -s -o /dev/null -m 5 -w '%{http_code}' "http://127.0.0.1:$LLM_PORT/ready" 2>/dev/null | grep -qx 200; do
 	n=$((n + 1))
-	if [ $n -ge 120 ] || ! "$TF_BIN" service status "$LLM_SERVICE" 2>/dev/null | grep -q 'loaded: True'; then
-		tail -15 "$TF_LOG" 2>/dev/null | sed 's/^/        log: /'
-		die "the server did not come up. See: $TF_BIN service logs $LLM_SERVICE"
+	if [ $n -ge 720 ] || ! job_loaded "gui/$LLM_UID/$SPLASH_LABEL"; then
+		tail -15 "$SPLASH_LOG" 2>/dev/null | sed 's/^/        log: /'
+		die "the server did not come up, so the endpoint is down. See: $SPLASH_LOG"
 	fi
 	sleep 5
 done
-grep -E '\[tensorfold\] (serving|context window)' "$TF_LOG" 2>/dev/null | tail -2 | sed 's/^[0-9:]* \[tensorfold\] /        /'
+ok "ready"
 
 step "Tailnet HTTPS"
 # As the Tailscale operator (scripts/2-tailscale.sh), no sudo needed.
@@ -110,9 +94,9 @@ unauth=$(http_code "$EP/v1/models")
 if [ "$code" = 200 ]; then ok "with the key    -> 200"; else bad "with the key    -> $code (want 200)"; fi
 if [ "$unauth" = 401 ]; then ok "without the key -> 401"; else bad "without the key -> $unauth (want 401)"; fi
 [ "$code" = 200 ] && [ "$unauth" = 401 ] \
-	|| die "the endpoint is not healthy. See: $TF_BIN service logs $LLM_SERVICE"
+	|| die "the endpoint is not healthy. See: $SPLASH_LOG"
 
-printf '\nEndpoint: %s/v1   model: %s\nKey:      the "clients" line of %s\n\nNext:\n' "$EP" "$LLM_SERVICE" "$KEY_FILE"
+printf '\nEndpoint: %s/v1   model: %s\nKey:      %s\n\nNext:\n' "$EP" "$LLM_SERVICE" "$KEY_FILE"
 if [ -f /etc/ssh/sshd_config.d/200-llm-server.conf ] || launchctl print "system/$L_PF" >/dev/null 2>&1; then
 	printf '    sudo sh scripts/verify.sh\n'
 else
