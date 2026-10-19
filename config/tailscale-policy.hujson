@@ -28,7 +28,7 @@
 				"tcp:443", // the inference endpoint (tailscale serve)
 				"tcp:22",  // SSH, if Remote Login is on
 				"tcp:5900", // Screen Sharing, if on (README, step 6)
-				// Sunshine, if installed (docs/omarchy-client.md, 7b). Its web
+				// Sunshine, if installed (docs/omarchy-desktop.md, step 2). Its web
 				// UI, 47990, stays out: it is reached through SSH.
 				"tcp:47984", "tcp:47989", "tcp:48010", "udp:47998-48000",
 			],
