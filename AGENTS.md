@@ -17,9 +17,10 @@ step by step. The server's scripts do not run there.
 Use Splash's M1/M2 port as it ships: its release installer, pinned by
 checksum; the checkpoint its release notes recommend and the draft Splash
 pairs with it automatically; its API key; and its defaults for everything
-else. The one departure is this repo's LaunchAgent, because Splash ships no
-service manager. Defer to the published measurements of Splash and the port
-rather than benchmarking. When a client does not work, find out whether Splash
+else. The departures are this repo's LaunchAgent, because Splash ships no
+service manager, and one setting: reasoning effort defaults to medium
+(`docs/findings.md` has why). Defer to the published measurements of Splash
+and the port rather than benchmarking. When a client does not work, find out whether Splash
 or the port documents the behaviour before changing anything here, and do not
 work around it with request rewriting or proxies; record it and wait for a
 release.

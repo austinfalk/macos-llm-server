@@ -24,8 +24,6 @@ if [ -f "$LLM_REPO/config.env" ]; then
 fi
 : "${LLM_USER:=${SUDO_USER:-$(id -un)}}"
 : "${LLM_MODEL:=mlx-community/Qwen3.8-27B-4bit}"
-: "${LLM_SERVICE:=local-model}"
-: "${LLM_PORT:=8080}"
 : "${LLM_TAG:=tag:llm-server}"
 : "${LLM_SSH_TAILNET_ONLY:=yes}"
 : "${LLM_BATTERY_SHUTDOWN_PCT:=15}"
@@ -46,6 +44,8 @@ SPLASH_BIN=$BREW_PREFIX/bin/splash-m1
 SPLASH_LABEL=com.llmserver.splash
 SPLASH_PLIST=$LLM_HOME/Library/LaunchAgents/$SPLASH_LABEL.plist
 SPLASH_LOG=$LLM_HOME/Library/Logs/llm-server/splash.log
+# Splash's default port: the LaunchAgent passes no --port.
+LLM_PORT=8000
 
 # Installed by 4-harden.sh. Services never point into this git checkout.
 LLM_SBIN=/usr/local/sbin
@@ -141,8 +141,6 @@ render() {
 	( umask 077
 	  sed -e "s|@LLM_BATTERY_SHUTDOWN_PCT@|$LLM_BATTERY_SHUTDOWN_PCT|g" \
 	      -e "s|@LLM_MODEL@|$LLM_MODEL|g" \
-	      -e "s|@LLM_PORT@|$LLM_PORT|g" \
-	      -e "s|@LLM_SERVICE@|$LLM_SERVICE|g" \
 	      -e "s|@ENDPOINT_HOST@|${ENDPOINT_HOST:-}|g" \
 	      -e "s|@KEY_FILE@|$KEY_FILE|g" \
 	      -e "s|@SPLASH_BIN@|$SPLASH_BIN|g" \

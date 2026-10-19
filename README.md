@@ -13,7 +13,7 @@ can point at it.
   your laptop, phone, CI ──Tailscale (WireGuard)──▶ tailscale serve :443    TLS, tailnet only
                                                         │
                                                         ▼
-                                                    Splash 127.0.0.1:8080   checks the API key,
+                                                    Splash 127.0.0.1:8000   checks the API key,
                                                                             runs the model on the GPU
 ```
 
@@ -176,7 +176,7 @@ script waits up to an hour. Later starts take a minute or two. It is safe to
 re-run at any time: it restarts the server only when its settings change.
 
 Your endpoint is `https://<machine>.<tailnet>.ts.net/v1`, and the model ID
-clients use is `local-model`. The key is the one line of
+clients use is `mlx-community/Qwen3.8-27B-4bit`. The key is the one line of
 `~/.config/llm-server/api-key`.
 
 **How it runs**, briefly:
@@ -188,31 +188,33 @@ clients use is `local-model`. The key is the one line of
   where macOS gives Splash the GPU and the Neural Engine. launchd starts it at
   login, stops it at logout, and starts it again if it fails. Its output goes
   to `~/Library/Logs/llm-server/splash.log`, which nothing rotates.
-- **Five flags.** The LaunchAgent runs `splash-m1 serve` with:
-  - `--model mlx-community/Qwen3.8-27B-4bit` (`LLM_MODEL`), the model. Splash
-    pairs it with its DFlash2 draft, `incoai/Qwen3.8-27B-DFlash2`, by itself.
-  - `--port 8080` (`LLM_PORT`), the loopback port `tailscale serve` forwards
-    to. Splash's own default is 8000.
-  - `--served-model-name local-model` (`LLM_SERVICE`), so clients ask for
-    `local-model` whatever `LLM_MODEL` is.
-  - `--announce-served-name`, so responses and `/v1/models` report
-    `local-model` too, not the repository ID, which some clients reject
-    *(sourced)*.
+- **Three flags.** The LaunchAgent runs `splash-m1 serve` with:
+  - `--model mlx-community/Qwen3.8-27B-4bit` (`LLM_MODEL`), the model, and the
+    ID clients use, which Splash reports in its responses and `/v1/models`.
+    Splash pairs it with its DFlash2 draft, `incoai/Qwen3.8-27B-DFlash2`, by
+    itself.
   - `--allowed-host <machine>.<tailnet>.ts.net`, the name `tailscale serve`
     passes on. Splash answers 403 to a Host name it was not started with, to
     keep out web pages that point a DNS name at the Mac. With this flag,
     requests through the tailnet get in; the server has not been run without
     it. The script reads the name from Tailscale.
+  - `--default-reasoning-effort medium`: requests that name no effort get
+    `medium` instead of the template's `xhigh`. At `xhigh`, answers took about
+    twice as long for a small gain in quality, and about a fifth came back
+    empty ([findings](docs/findings.md)).
+
+  Splash listens on its default port, 8000, which `tailscale serve` forwards
+  to.
 - **Everything else is Splash's default.** On this Mac that means a context of
   262,144 tokens, the model's native window; an INT8 KV cache; Neural Engine
   prefill; an SSD prompt cache of up to 32 GiB in `$TMPDIR`, gone when the
   engine exits; the weights released after 10 idle minutes and restored by the
-  next request, which then waits about 6 s more; the template's reasoning
-  effort, `xhigh`, and Qwen's sampling (temperature 1.0, top_p 0.95, top_k 20)
-  for requests that set none; up to 32 requests admitted at once; the chat page
-  at `/`; and the Mac kept awake while requests run. Each start asks Hugging
-  Face for the model's newest commit, in one request of at most 5 s, and
-  follows it. `--revision <commit>` would pin it; this setup does not.
+  next request, which then waits about 6 s more; Qwen's sampling
+  (temperature 1.0, top_p 0.95, top_k 20) for requests that set none; up to 32
+  requests admitted at once; the chat page at `/`; and the Mac kept awake while
+  requests run. Each start asks Hugging Face for the model's newest commit, in
+  one request of at most 5 s, and follows it. `--revision <commit>` would pin
+  it; this setup does not.
 - **The key reaches Splash in its environment.** The LaunchAgent runs
   `/bin/sh -c`, which reads the key file into `SPLASH_API_KEY` and `exec`s
   `splash-m1 serve`, so the key is never on a command line or in the plist.
@@ -323,12 +325,13 @@ hardening. It exits non-zero if anything fails.
      | curl -sf -K - https://<machine>.<tailnet>.ts.net/v1/models
    ```
 
-   `"id": "local-model"` means the tailnet, TLS, the key and Splash all work.
+   `"id": "mlx-community/Qwen3.8-27B-4bit"` means the tailnet, TLS, the key and
+   Splash all work.
 
 Base URL `https://<machine>.<tailnet>.ts.net/v1` (Anthropic clients take it
-without `/v1`), model `local-model`, API key as above. Splash applies Qwen's
-sampling settings when a client sends none, and the model thinks before
-answering: allow 16K+ output tokens, or a reply that runs out while thinking
+without `/v1`), model `mlx-community/Qwen3.8-27B-4bit`, API key as above.
+Splash applies Qwen's sampling settings when a client sends none, and the
+model thinks before answering: allow 16K+ output tokens, or a reply that runs out while thinking
 comes back empty. **Tell clients the context window**, 262,144 tokens here, or
 less, so they compact before reaching it. `/v1/models` reports it as
 `context_length`.
@@ -360,7 +363,7 @@ configurations for all four, with checks.
 |---|---|
 | Restart | `launchctl kickstart -k gui/$(id -u)/com.llmserver.splash` |
 | Stop | `launchctl bootout gui/$(id -u)/com.llmserver.splash`; it starts again at your next login, or when you re-run `3-services.sh` |
-| Status | `curl -s -o /dev/null -w '%{http_code}\n' 127.0.0.1:8080/ready` prints 200 once the model is ready; `grep -E 'Ready\|Done' ~/Library/Logs/llm-server/splash.log \| tail` shows when it became ready and the last requests |
+| Status | `curl -s -o /dev/null -w '%{http_code}\n' 127.0.0.1:8000/ready` prints 200 once the model is ready; `grep -E 'Ready\|Done' ~/Library/Logs/llm-server/splash.log \| tail` shows when it became ready and the last requests |
 | Job | `~/Library/LaunchAgents/com.llmserver.splash.plist` (from `config/com.llmserver.splash.plist`; change it by re-running `3-services.sh`) |
 | Log | `~/Library/Logs/llm-server/splash.log` (Splash's output; nothing rotates it) |
 | API key | `~/.config/llm-server/api-key` |
@@ -419,8 +422,8 @@ binary your account owns is one it could replace.
 
 **Change the model.** Set `LLM_MODEL` in `config.env` and re-run
 `3-services.sh`. It rewrites the LaunchAgent and restarts the server, which
-downloads the new model and its draft at its first start. Clients keep asking
-for `local-model`, but check the context window `/v1/models` reports.
+downloads the new model and its draft at its first start. Clients must ask for
+the new model's ID, and check the context window `/v1/models` reports.
 
 **Rotate the key.** Delete `~/.config/llm-server/api-key` and re-run
 `3-services.sh`. It makes a new key and restarts the server, because Splash
@@ -446,5 +449,5 @@ too.
 | `502` from the endpoint | Splash is not running: after a restart, nobody has logged in | Log in over Screen Sharing, then check its status (step 9) |
 | `503` `engine_recovering` | Splash's engine failed and is restarting; the message names the failure | Retry. If it fails three times soon after starting, Splash stops restarting it and answers `500` `engine_failed`: restart the server (step 9) and read the log |
 | Empty answers | The model spent the reply's output limit thinking | Allow 16K+ output tokens (step 8), and ask for `medium` reasoning effort |
-| `3-services.sh`: "something else listens on port 8080" | Another server uses the port | Stop the process the message names, then re-run `3-services.sh` |
+| `3-services.sh`: "something else listens on port 8000" | Another server uses the port | Stop the process the message names, then re-run `3-services.sh` |
 | `Bootstrap failed: 5: Input/output error` | A launchd job was restarted too quickly | Re-run the script; it waits and retries |
