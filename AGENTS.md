@@ -33,8 +33,9 @@ release.
   LaunchAgent) and the hardening step (pf, sshd, battery watchdog) install,
   with `@PLACEHOLDERS@` filled by `render()` in `lib.sh`. `config.env`
   (gitignored) overrides the defaults in `lib.sh`.
-- `docs/` — `findings.md`, the measurements and their history, and
-  `omarchy-client.md`, the client guide.
+- `docs/` — `findings.md`, the measurements and their history;
+  `omarchy-client.md`, the client guide; and `omarchy-desktop.md`, the Mac's
+  desktop and SSH from the client.
 
 ## Conventions
 

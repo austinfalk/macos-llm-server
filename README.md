@@ -267,7 +267,7 @@ sudo sh scripts/4-harden.sh
   iPad, Remmina (with `libvncserver`) on Linux — TigerVNC cannot. It works at
   the login window, which is how you **log in after a restart** and so start
   the model server. For smoother video, Sunshine and Moonlight
-  ([docs/omarchy-client.md](docs/omarchy-client.md), 7b) work once you are
+  ([docs/omarchy-desktop.md](docs/omarchy-desktop.md), step 2) work once you are
   logged in; keep Screen Sharing on as the way in.
 
 **FileVault is your decision.** With it **off**, after any restart the Mac
