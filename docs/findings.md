@@ -146,8 +146,8 @@ notes said it would. It took 54.9 s and kept share 0.47 ("79.0 ms per
 and Splash was ready 85 s after loading began. `/v1/models` still reports
 `context_length` 262,144. A short chat with no effort ran at `medium`, as
 before, and wrote 61.1 tok/s at 5.8 tokens a cycle. `sudo sh scripts/verify.sh`
-passed with 0 failures and 0 warnings. The speed table below
-was not measured again.
+passed with 0 failures and 0 warnings. [Speed](#speed) compares it with
+1.3.2-m1.1.
 
 ### Speed
 
@@ -169,6 +169,27 @@ and read and write in tok/s:
 | A short code request | 63-67 | 1.0 s | | 33.1 (28.7-35.3) |
 | README, findings, client guide and four scripts, cold | 31,349 | 208.2 s | 151 | 25.1 (22.3-28.0) |
 | Its follow-up, cached | 31,370 | 1.1 s | | 22.8 (20.2-22.9) |
+
+**On 1.4.0-m1.** On 2026-10-31 the same script ran the first four cases
+again, three runs each, after a warm-up request. Its prompts came from the
+commit `main` was at on 2026-10-18, and their token counts match the table.
+The 31K cases were left out to keep the run under 10 minutes.
+
+| Case | First token | Read | Write |
+|---|---|---|---|
+| A question about `verify.sh`, cold | 12.9 s | 203 | 44.0 (42.2-46.1) |
+| Its follow-up, cached | 1.5 s | | 34.4 (33.7-35.6) |
+| README and three scripts, cold | 60.4 s | 201 | 32.7 (29.0-35.5) |
+| A short code request | 0.9 s | | 41.3 (40.2-45.2) |
+
+Cold prompts read 10-13% faster, and every case wrote faster, by 2-26%.
+How much of that is the new build is not known. Splash's log puts the decode
+cycle at 94-101 ms, against about 109 ms on 1.3.2-m1.1 (below). That is
+8-14% faster, more than the 1-3% the port's notes claim for this checkpoint
+*(sourced)*, and those notes claim no change in cold prefill. The 2026-10-18
+run came straight after a benchmark of the engine before, so the Mac may not
+have been in the same state; that was not checked. Long-context attention,
+the release's largest change, was not measured.
 
 Reading and writing both slow as the conversation grows. Cached follow-ups
 start in 1-2 s. The replies were coherent (spot-checked). At `medium`, 512
