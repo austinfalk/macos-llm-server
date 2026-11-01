@@ -145,7 +145,8 @@ notes said it would. It took 54.9 s and kept share 0.47 ("79.0 ms per
 2048-row FFN layer against 142.0 on the GPU alone"). Weights loaded in 7.5 s
 and Splash was ready 85 s after loading began. `/v1/models` still reports
 `context_length` 262,144. A short chat with no effort ran at `medium`, as
-before, and wrote 61.1 tok/s at 5.8 tokens a cycle. The speed table below
+before, and wrote 61.1 tok/s at 5.8 tokens a cycle. `sudo sh scripts/verify.sh`
+passed with 0 failures and 0 warnings. The speed table below
 was not measured again.
 
 ### Speed
