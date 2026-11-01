@@ -7,7 +7,7 @@ MacBook Pro 16" (M1 Max, 10-core CPU, 32-core GPU, 64 GB).
 The findings come in three parts:
 
 1. Part 1, [the server](#the-server-splash-for-m1m2-and-qwen38-27b), is the
-   server as it runs now, Splash's M1/M2 port 1.3.2-m1.1 on its defaults, on
+   server as it runs now, Splash's M1/M2 port 1.4.0-m1 on its defaults, on
    macOS 27.0.1. It covers the settings, startup, speed, idle release, clients,
    known gaps and what is not measured.
 2. Part 2, [the Mac, whatever the engine](#the-mac-whatever-the-engine),
@@ -26,13 +26,15 @@ reproduced here. Everything else was.
 ## The server: Splash for M1/M2 and Qwen3.8-27B
 
 Since 2026-10-18 the server runs
-[paperniuk/splash](https://github.com/paperniuk/splash) 1.3.2-m1.1
-(2026-10-16), an unofficial port of [Splash](https://github.com/incoai/splash)
+[paperniuk/splash](https://github.com/paperniuk/splash), since 2026-10-31
+release 1.4.0-m1 (2026-10-24), an unofficial port of [Splash](https://github.com/incoai/splash)
 for M1 and M2. Splash, by Inco, needs an M3 or newer and refuses older GPUs.
 The port adds Metal kernels for Apple7 and Apple8 GPUs (M1, M2), bounded
 prefill commands so that macOS does not abort long prompts
 (`ImpactingInteractivity`), and Neural Engine prefill on M1 and M2
 *(sourced)*. Its author tested it on an M1 Max, not on an M2 *(sourced)*.
+1.4.0-m1 is Splash 1.4.0 with the port's kernels on top *(sourced)*.
+[Upgrade to 1.4.0-m1](#upgrade-to-140-m1) has what the upgrade changed here.
 [The move to Splash](#the-move-to-splash) says why the server changed engines.
 
 ### Settings
@@ -104,14 +106,14 @@ server's default is `medium` because of these measurements by others
 
 **A Messages request with no effort runs at `xhigh`.** When a Messages
 request asks for thinking and names no `output_config.effort`, Splash gives it
-`high` (`server/api_shapes.py:683` in the port,
+`high` (`server/api_shapes.py:686` in the port,
 `effort = _field(output_config, "effort", "high")`). The request then carries
 an effort, and `--default-reasoning-effort` applies only to a request without
-one (`server/frontend.py:833`). If Qwen3.8's template raises an error on
+one (`server/frontend.py:860`). If Qwen3.8's template raises an error on
 `high`, Splash renders the alias `xhigh` instead (`render_chat_template` and
 `REASONING_EFFORT_ALIASES = {"high": "xhigh", ...}` in
-`server/chat_templates.py:92`); whether it does was not checked. This is read from the
-installed port, 1.3.2-m1.1, and was not measured. `claude-local` asks for
+`server/chat_templates.py:99`); whether it does was not checked. This is read from the
+installed port, 1.3.2-m1.1 and again 1.4.0-m1, and was not measured. `claude-local` asks for
 `medium` itself with `CLAUDE_CODE_EFFORT_LEVEL`, and the client guide's step 7
 logged `effort medium` for it ([Clients](#clients)).
 
@@ -129,9 +131,27 @@ server idle, wired memory was about 33 GiB, and the engine's resident size
 7.4 GB. Later starts reuse the calibration. A restart was ready 22 s after
 loading began.
 
+### Upgrade to 1.4.0-m1
+
+On 2026-10-31 the server moved from 1.3.2-m1.1 to 1.4.0-m1 with
+`1-install.sh` and `3-services.sh`. The port's notes promise faster prompt
+appends, 1.14-1.31 times faster long-context attention, and 1-3% faster
+decode for the 27B MLX 4-bit on an M1 Max *(sourced)*. The checkpoint, its
+draft and every setting stayed the same.
+
+The endpoint was down for 89 s, from the restart in `3-services.sh` to its
+checks passing. The new build calibrated the Neural Engine again, as its
+notes said it would. It took 54.9 s and kept share 0.47 ("79.0 ms per
+2048-row FFN layer against 142.0 on the GPU alone"). Weights loaded in 7.5 s
+and Splash was ready 85 s after loading began. `/v1/models` still reports
+`context_length` 262,144. A short chat with no effort ran at `medium`, as
+before, and wrote 61.1 tok/s at 5.8 tokens a cycle. `sudo sh scripts/verify.sh`
+passed with 0 failures and 0 warnings. The speed table below
+was not measured again.
+
 ### Speed
 
-Measured on 2026-10-18. Each case was a streamed chat completion, timed on the
+Measured on 2026-10-18, on 1.3.2-m1.1. Each case was a streamed chat completion, timed on the
 client. First token is the time to the first token. Read is the prompt tokens
 over that time. Write is the completion tokens less one over the time from the
 first token to the last. Requests asked for `reasoning_effort: medium`, as the
