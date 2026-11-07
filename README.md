@@ -252,7 +252,20 @@ sudo fdesetup enable
 ```
 
 It asks for your password and prints a recovery key. Keep the key in your
-password manager, not on the Mac. With FileVault on, anyone holding the Mac
+password manager, not on the Mac. If it prints none, the Mac kept the key from
+an earlier time FileVault was on, and you may not have it. Make a new one,
+which replaces the old, and check the copy you saved:
+
+```sh
+sudo fdesetup changerecovery -personal
+sudo fdesetup validaterecovery
+```
+
+`validaterecovery` asks for the key and prints `true` if it is the Mac's. On
+macOS 26 and later, System Settings → Privacy & Security → FileVault can also
+show a recovery key, a copy kept in Passwords. A key changed with `fdesetup`
+does not update that copy, so check it the same way before relying on it
+([findings](docs/findings.md#security)). With FileVault on, anyone holding the Mac
 cannot read its disk, and macOS turns off automatic login. The cost is
 restarts. After a restart with `sudo fdesetup authrestart`, the Mac unlocks
 its disk once by itself and waits at the login window with the tailnet up, so

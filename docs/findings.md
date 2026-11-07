@@ -468,8 +468,16 @@ Found by 2026-10-03, except where an item says otherwise.
   names, so on 2026-11-07 `verify.sh` failed both password checks with an
   empty value while sshd still refused passwords. Both scripts now compare
   the keyword in any case.
-- **`/etc/kcpassword`** holds the auto-login password, obfuscated with a
-  published key.
+- **`fdesetup enable` can print no recovery key** (2026-11-07, macOS 27.2).
+  On APFS it keeps a personal recovery key from an earlier enablement and
+  creates none (`man fdesetup`). The key System Settings showed, its copy in
+  Passwords, did not pass `fdesetup validaterecovery`. After
+  `fdesetup changerecovery -personal`, the new key passed, and Settings still
+  showed the old one. The man page allows one personal recovery key at a time,
+  so the copy in Passwords was stale, not a second key.
+  [Six Colors](https://sixcolors.com/post/2026/05/filevault-keys-cant-be-escrowed-in-iCloud-anymore/)
+  reports Settings and Passwords out of step with the Mac's key before, fixed
+  by turning FileVault off and on in Settings *(sourced)*.
 - **pf filters loopback.** Rules that pass only tailnet sources also drop
   connections from 127.0.0.1, so Screen Sharing's port never answers on the
   Mac itself. A connection to the machine's own LAN address comes from that
