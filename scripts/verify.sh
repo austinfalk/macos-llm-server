@@ -108,8 +108,8 @@ fi
 if [ -e /etc/kcpassword ]; then fail "/etc/kcpassword exists"; else pass "no /etc/kcpassword"; fi
 
 if nc -z -G 2 127.0.0.1 22 >/dev/null 2>&1; then
-	expect "SSH password authentication" "$(/usr/sbin/sshd -T 2>/dev/null | awk '$1 == "passwordauthentication" {print $2}')" no
-	expect "SSH keyboard-interactive authentication" "$(/usr/sbin/sshd -T 2>/dev/null | awk '$1 == "kbdinteractiveauthentication" {print $2}')" no
+	expect "SSH password authentication" "$(/usr/sbin/sshd -T 2>/dev/null | awk 'tolower($1) == "passwordauthentication" {print $2}')" no
+	expect "SSH keyboard-interactive authentication" "$(/usr/sbin/sshd -T 2>/dev/null | awk 'tolower($1) == "kbdinteractiveauthentication" {print $2}')" no
 	if [ "$LLM_SSH_TAILNET_ONLY" = yes ]; then
 		# A client cannot tell a DenyUsers refusal from a key rejection, so ask
 		# sshd what it would apply to a connection from each address.
