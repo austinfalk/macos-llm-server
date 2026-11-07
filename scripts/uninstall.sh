@@ -33,7 +33,7 @@ rm -rf "$LLM_ETC"
 ok "battery watchdog and firewall jobs"
 # Only this anchor's rules: pf itself stays as macOS left it.
 if pfctl -a "$PF_ANCHOR" -F rules 2>/dev/null; then
-	ok "firewall rules (Screen Sharing and Sunshine, if on, are reachable from every network again)"
+	ok "firewall rules (Screen Sharing, if on, is reachable from every network again)"
 else
 	warn "could not flush pf anchor $PF_ANCHOR: run 'sudo pfctl -a $PF_ANCHOR -F rules'"
 fi
@@ -66,8 +66,8 @@ cat <<LEFT
   logs             $SPLASH_LOG, $LLM_LOGS
   Splash           $splash
   Splash's data    $LLM_HOME/Library/Application Support/Splash
-  packages         brew uninstall tailscale
+  packages         sudo tailscaled uninstall-system-daemon, then brew uninstall tailscale
   tailnet          sudo tailscale logout
   power settings   pmset -g custom   (these are ordinary macOS settings)
-  automatic login  stays off
+  FileVault        left as it is
 LEFT

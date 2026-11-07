@@ -13,16 +13,29 @@ check_user
 backend() { tailscale status --json 2>/dev/null | plutil -extract BackendState raw -o - - 2>/dev/null; }
 
 step "Tailscale daemon"
-# The Homebrew formula's tailscaled is a system LaunchDaemon, so the tailnet is
-# up at boot before anyone logs in: Screen Sharing at the login window, and SSH,
-# work over it after a restart.
-if [ -z "$(backend)" ]; then
-	"$BREW_PREFIX/bin/brew" services start tailscale
-	n=0
-	while [ -z "$(backend)" ] && [ $n -lt 30 ]; do sleep 1; n=$((n + 1)); done
-	[ -n "$(backend)" ] || die "tailscaled did not start. Check: sudo brew services info tailscale"
+# Tailscale's own installer copies tailscaled to /usr/local/bin, which root owns,
+# and runs it at boot, before anyone logs in: Screen Sharing at the login
+# window, and SSH, work over it after a restart. Run as root from Homebrew's
+# prefix instead, which the user owns, anything running as the user could swap
+# the binary and become root at its next start.
+OLD_PLIST=/Library/LaunchDaemons/sh.brew.tailscale.plist
+if [ ! -f "$TAILSCALED_PLIST" ] || ! cmp -s "$BREW_PREFIX/bin/tailscaled" "$TAILSCALED"; then
+	# The tailnet is down until the new daemon starts. Ignore the hangup of an
+	# SSH session that drops with it, so the script finishes the switch.
+	trap '' HUP
+	if [ -f "$OLD_PLIST" ]; then
+		launchctl bootout system/sh.brew.tailscale 2>/dev/null || :
+		rm -f "$OLD_PLIST"
+		# `sudo brew services` left these root-owned, which blocks brew cleanup.
+		chown -R -h "$LLM_USER:admin" "$BREW_PREFIX/Cellar/tailscale" "$BREW_PREFIX/opt/tailscale" "$BREW_PREFIX/var/log/tailscaled.log" 2>/dev/null || :
+	fi
+	"$BREW_PREFIX/bin/tailscaled" install-system-daemon || die "tailscaled install-system-daemon failed. The tailnet is down: re-run this script."
+	trap - HUP
 fi
-ok "tailscaled answering (state: $(backend))"
+n=0
+while [ -z "$(backend)" ] && [ $n -lt 30 ]; do sleep 1; n=$((n + 1)); done
+[ -n "$(backend)" ] || die "tailscaled did not start. Check: sudo launchctl print system/com.tailscale.tailscaled"
+ok "tailscaled answering from $TAILSCALED (state: $(backend))"
 
 step "Tailnet membership"
 if [ "$(backend)" != Running ]; then

@@ -28,6 +28,7 @@ When you are done:
   repository installs, because Splash ships no service manager. After a
   restart, you log in once, over Screen Sharing from anywhere on your tailnet,
   and it starts.
+- The disk is encrypted with **FileVault**.
 - It is reachable **only over your tailnet**, and **only with an API key**.
   Nothing listens on the local network.
 - One command, `scripts/verify.sh`, checks all of it.
@@ -163,7 +164,11 @@ sudo sh scripts/2-tailscale.sh
 ```
 
 The script runs Tailscale as a system daemon, so the tailnet is up at boot,
-before anyone logs in, and you can reach the login window remotely. The first
+before anyone logs in, and you can reach the login window remotely. It uses
+Tailscale's own installer, `tailscaled install-system-daemon`, which copies
+the daemon to `/usr/local/bin`, where only root can change it. Homebrew's
+folders belong to your account, and a daemon root runs from there could be
+swapped by anything running as you. The first
 time, it prints a login URL. Open it, and approve the machine in the admin
 console. The script joins with the `tag:llm-server` tag, and tagged devices
 never have their keys expire. It also makes your account Tailscale's operator,
@@ -235,54 +240,65 @@ as you can read the key file.
 
 ## 6. Harden the machine
 
+Turn on FileVault first, if it is not on already:
+
+```sh
+sudo fdesetup enable
+```
+
+It asks for your password and prints a recovery key. Keep the key in your
+password manager, not on the Mac. With FileVault on, anyone holding the Mac
+cannot read its disk, and macOS turns off automatic login. The cost is
+restarts. After a restart with `sudo fdesetup authrestart`, the Mac unlocks
+its disk once by itself and waits at the login window with the tailnet up, so
+you can log in over Screen Sharing
+([Twocanoes](https://twocanoes.com/knowledge-base/unlock-filevault-automatically/))
+*(sourced)*. After any other restart, such
+as a crash or a power cut, it waits for the password at the Mac itself, with
+no network. Whether a macOS update restarts through `authrestart` was not
+tested here.
+
+Then:
+
 ```sh
 sudo sh scripts/4-harden.sh
 ```
 
-- **Automatic login.** The script turns it off and removes `/etc/kcpassword`,
-  which stores the login password with a published, reversible obfuscation.
-  After a restart, you log in yourself, over Screen Sharing (below).
+- **FileVault.** The script warns you if it is off. `verify.sh` fails.
 - **SSH.** If Remote Login is on, SSH accepts keys only, and only from the
-  tailnet unless you set `LLM_SSH_TAILNET_ONLY=no`. Tailscale's access rules do
-  not cover your local network, so without this your SSH password is open to
-  anything on the LAN. If your account has no SSH key installed, the script
-  stops before it changes SSH, rather than lock you out. Add a key to
-  `~/.ssh/authorized_keys` and re-run.
-- **Power.** Desktops never sleep, and restart after a power failure where the
-  hardware supports it. Laptops never sleep on mains power, and a watchdog
-  **shuts down cleanly at 15% battery** instead of dying and losing memory. On
-  battery, a laptop still sleeps when idle, and the server with it, unless you
-  set `LLM_DISABLE_SLEEP=yes` (below). Apple documents that Apple Silicon
-  laptops power back on when mains power returns. This guide has not tested it.
-- **AirPlay Receiver.** If it is on, the script warns you, because it listens
-  on ports 5000 and 7000 on every network. Unless you use it, turn it off in
-  System Settings → General → AirDrop & Handoff.
-- **Screen Sharing, tailnet only.** Screen Sharing (port 5900), the Kerberos
-  port its sign-in can use (88), and Sunshine listen on every network. The
-  script installs pf rules, reloaded at every boot, that drop their ports
-  unless the connection comes from the tailnet
-  ([findings](docs/findings.md#security)). Screen Sharing is how you log in
-  after a restart, so turn it on: System Settings → General → Sharing →
-  **Screen Sharing**, **Allow access for: Only these users** (your account),
-  and **"VNC viewers may control screen with password"** off, because that
-  password is an old 8-character scheme.
-  [docs/omarchy-desktop.md](docs/omarchy-desktop.md) covers the clients, and
-  Sunshine for smoother video once you are logged in.
+  tailnet. Tailscale's access rules do not cover your local network, so without
+  this your SSH password is open to anything on the LAN. If your account has no
+  SSH key installed, the script stops before it changes SSH, rather than lock
+  you out. Add a key to `~/.ssh/authorized_keys` and re-run.
+- **Power.** Desktops never sleep. Laptops never sleep on mains power with the
+  lid open, and sleep as usual when you close the lid (below).
+- **Screen Sharing, tailnet only.** Screen Sharing (port 5900), and the
+  Kerberos port its sign-in can use (88), listen on every network. The script
+  installs pf rules, reloaded at every boot, that drop both unless the
+  connection comes from the tailnet ([findings](docs/findings.md#security)).
+  Screen Sharing is how you log in remotely after a restart, so turn it on:
+  System Settings → General → Sharing → **Screen Sharing**, **Allow access
+  for: Only these users** (your account), and **"VNC viewers may control
+  screen with password"** off, because that password is an old 8-character
+  scheme. Connect to `<machine>.<tailnet>.ts.net` from another Mac with
+  Screen Sharing, or with a VNC client that supports Apple's sign-in, such as
+  Remmina on Linux, and sign in with your macOS account.
 
-**FileVault is your decision.** With it **off**, the Mac reaches the login
-window by itself after any restart, and you log in over Screen Sharing, but
-anyone holding the machine can read the disk. With it **on**, the disk is
-protected, but after an unplanned restart the Mac waits at FileVault's unlock
-screen, with no network, until someone types the password at the machine. For
-planned restarts, `sudo fdesetup authrestart` unlocks the next boot once. A
-desktop in a locked room and a laptop that travels deserve different answers.
+Turn off any other sharing service you do not use, in System Settings →
+General → Sharing. AirPlay Receiver, under General → AirDrop & Handoff, also
+listens on every network.
 
-**Laptops with the lid shut.** Closing the lid normally sleeps a laptop. To
-keep it serving, set `LLM_DISABLE_SLEEP=yes` in `config.env` and re-run
-`4-harden.sh`, which then applies `pmset -a disablesleep 1`. That setting is
-undocumented and system-wide, battery included. The default, `no`, sets it
-back to `0`. On mains power, with the lid shut, this guide's Mac served
-requests for hours without sleeping
+**Laptops with the lid shut.** Closing the lid sleeps a laptop. A sleeping Mac
+should not wake for a request over the tailnet, because Tailscale's encrypted
+traffic is not something macOS's wake-for-network can answer for. That was
+not tested here. To keep it serving, set
+`LLM_DISABLE_SLEEP=yes` in `config.env` and re-run `4-harden.sh`, which then
+applies `pmset -a disablesleep 1`. That setting is undocumented and
+system-wide, battery included. So the script also installs a watchdog that
+**shuts the Mac down cleanly at 15% battery** (`LLM_BATTERY_SHUTDOWN_PCT`),
+instead of running flat. Back on `no`, the default, it sets `disablesleep` to
+`0` and removes the watchdog. On mains power, with the lid shut, this guide's
+Mac served requests for hours without sleeping
 ([findings](docs/findings.md#unattended-operation)). On battery it has not
 been tested.
 
@@ -301,7 +317,7 @@ LaunchAgent is loaded in your session, that Splash is the pinned version (on an
 M3 or later, also pinned in Homebrew) and runs as you, not as root, that
 nothing listens beyond loopback, the API key with both headers (and wrong,
 empty and missing keys), what `/health` reveals, the model ID clients see, and
-the hardening. It exits non-zero if anything fails.
+FileVault and the hardening. It exits non-zero if anything fails.
 
 ---
 
@@ -345,8 +361,8 @@ calls instead of following a trivial instruction, until it was stopped.
 Splash's own launchers, `splash claude`, `codex`, `opencode`, `hermes` and
 `pi`, connect only to a server on the same Mac, and so do the port's
 `splash-m1` ones. From another machine, configure each tool by hand.
-[docs/omarchy-client.md](docs/omarchy-client.md) has step-by-step
-configurations for all four, with checks.
+[docs/clients.md](docs/clients.md) has step-by-step configurations for all
+four, with checks.
 
 ---
 
@@ -369,7 +385,9 @@ configurations for all four, with checks.
 
 **After a restart**, connect with Screen Sharing and log in. The server starts
 with your session, and the status command above prints 200 a minute or two
-later.
+later. After an unplanned restart, unlock FileVault at the Mac first. To
+restart it remotely, use `sudo fdesetup authrestart`, which unlocks the next
+boot once.
 
 **Update Splash.** A new release means new pins in `scripts/variant.sh`. Read
 its notes first, especially for client support (step 8).
@@ -418,19 +436,9 @@ pin `3-services.sh` restarts the server onto it, waits for the model, and
 checks the endpoint. Clients need no change.
 
 **Update Tailscale** with Homebrew, `brew upgrade tailscale` or a routine
-`brew upgrade`, then restart it with `sudo brew services restart tailscale`.
-Because `sudo brew services` makes root own the running version's `bin/`, the
-cleanup after the upgrade fails with "Could not cleanup old kegs". Once the
-restart has moved the service to the new version, give the old one back to
-your account and remove it:
-
-```sh
-sudo chown -R "$(whoami):admin" "$(brew --cellar tailscale)/OLD_VERSION"
-brew cleanup tailscale
-```
-
-Leave the running version owned by root, because the daemon runs as root
-([findings](docs/findings.md#security)).
+`brew upgrade`, then re-run `sudo sh scripts/2-tailscale.sh`. It copies the new
+daemon into place and restarts it, which drops the tailnet for a few seconds.
+`verify.sh` fails while the old daemon still runs.
 
 **Change the model.** Set `LLM_MODEL` in `config.env` and re-run
 `3-services.sh`. It rewrites the LaunchAgent and restarts the server, which
@@ -447,8 +455,8 @@ instead of deleting it, restart the server yourself (the table above).
 removes Splash's LaunchAgent, the hardening jobs, the pf rules and the SSH
 hardening, so SSH accepts passwords again, the macOS default. It prints what it
 leaves in place on purpose: the models, the key, the logs, Splash and its data
-folder, Tailscale and the tailnet membership, the power settings, and automatic
-login, which stays off.
+folder, Tailscale and the tailnet membership, the power settings, and
+FileVault.
 
 ---
 
@@ -460,6 +468,6 @@ login, which stays off.
 | `403` "Host NAME is not allowed; restart the server with --allowed-host NAME" | The request names the server by a name it was not started with. A client uses another name, or the machine's tailnet name changed | Use `https://<machine>.<tailnet>.ts.net` in clients. After a rename, re-run `3-services.sh` |
 | `502` from the endpoint | Splash is not running, usually because nobody has logged in since a restart | Log in over Screen Sharing, then check its status (step 9) |
 | `503` `engine_recovering` | Splash's engine failed and is restarting. The message names the failure | Retry. If it fails three times soon after starting, Splash stops restarting it and answers `500` `engine_failed`. Restart the server (step 9) and read the log |
-| Empty answers | The model spent the client's whole output limit thinking | Raise the client's output limit. The configs in [docs/omarchy-client.md](docs/omarchy-client.md) allow 32,768 tokens |
+| Empty answers | The model spent the client's whole output limit thinking | Raise the client's output limit. The configs in [docs/clients.md](docs/clients.md) allow 32,768 tokens |
 | `3-services.sh`: "something else listens on port 8000" | Another server uses the port | Stop the process the message names, then re-run `3-services.sh` |
 | `Bootstrap failed: 5: Input/output error` | A launchd job was restarted too quickly | Re-run the script. It waits and retries |

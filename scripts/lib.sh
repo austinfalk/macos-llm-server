@@ -25,7 +25,6 @@ fi
 : "${LLM_USER:=${SUDO_USER:-$(id -un)}}"
 : "${LLM_MODEL:=mlx-community/Qwen3.8-27B-4bit}"
 : "${LLM_TAG:=tag:llm-server}"
-: "${LLM_SSH_TAILNET_ONLY:=yes}"
 : "${LLM_BATTERY_SHUTDOWN_PCT:=15}"
 : "${LLM_DISABLE_SLEEP:=no}"
 
@@ -43,6 +42,10 @@ SPLASH_LOG=$LLM_HOME/Library/Logs/llm-server/splash.log
 # Splash's default port: the LaunchAgent passes no --port.
 LLM_PORT=8000
 
+# Installed by `tailscaled install-system-daemon` (2-tailscale.sh).
+TAILSCALED=/usr/local/bin/tailscaled
+TAILSCALED_PLIST=/Library/LaunchDaemons/com.tailscale.tailscaled.plist
+
 # Installed by 4-harden.sh. Services never point into this git checkout.
 LLM_SBIN=/usr/local/sbin
 LLM_ETC=/usr/local/etc/llm-server
@@ -51,8 +54,8 @@ L_WATCHDOG=com.llmserver.batterywatchdog
 L_PF=com.llmserver.pf
 P_WATCHDOG=/Library/LaunchDaemons/$L_WATCHDOG.plist
 P_PF=/Library/LaunchDaemons/$L_PF.plist
-# pf rules for Screen Sharing and Sunshine live in an anchor under com.apple/,
-# which the stock /etc/pf.conf already evaluates.
+# pf rules for Screen Sharing live in an anchor under com.apple/, which the
+# stock /etc/pf.conf already evaluates.
 PF_ANCHOR=com.apple/250.llm-server
 
 # --- output -----------------------------------------------------------------
@@ -124,6 +127,15 @@ start_job() {  # domain label plist
 	done
 	launchctl bootstrap "$1" "$3"   # once more, unmuted, to show the error
 	return 1
+}
+
+# pf expands the port list into one rule per port, and drops nothing unless pf
+# itself is enabled.
+pf_loaded() {
+	_r=$(pfctl -a "$PF_ANCHOR" -sr 2>/dev/null)
+	printf '%s\n' "$_r" | grep -q 'block drop in quick proto tcp.*port = 5900$' \
+		&& printf '%s\n' "$_r" | grep -q 'block drop in quick proto tcp.*port = 88$' \
+		&& pfctl -s info 2>/dev/null | grep -q 'Status: Enabled'
 }
 
 json_value() { printf '%s' "$1" | plutil -extract "$2" raw -o - - 2>/dev/null || :; }

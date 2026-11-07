@@ -466,8 +466,8 @@ Found by 2026-10-03, except where an item says otherwise.
   (`PasswordAuthentication no`, not `passwordauthentication no`), as on this
   Mac with macOS 27.2. `verify.sh` and `4-harden.sh` matched the lowercase
   names, so on 2026-11-07 `verify.sh` failed both password checks with an
-  empty value while sshd still refused passwords. Both scripts now compare the keyword in any
-  case.
+  empty value while sshd still refused passwords. Both scripts now compare
+  the keyword in any case.
 - **`/etc/kcpassword`** holds the auto-login password, obfuscated with a
   published key.
 - **pf filters loopback.** Rules that pass only tailnet sources also drop
@@ -477,10 +477,17 @@ Found by 2026-10-03, except where an item says otherwise.
 - **Root and Homebrew.** Homebrew's prefix belongs to the user, so a job root
   runs from it lets anything running as that user become root at its next
   start. The model server is a LaunchAgent in the user's session and runs as
-  that user. The one root service from Homebrew is `tailscaled`, as its
-  formula says to run it (`sudo brew services`). That leaves its running
-  version owned by root, which is why `brew upgrade tailscale` cannot clean up
-  the old one (README, step 9).
+  that user. Until 2026-11-07, `tailscaled` ran as root from Homebrew, as its
+  formula says (`sudo brew services`), from
+  `/opt/homebrew/opt/tailscale/bin/tailscaled`. The binary was root's, but
+  `opt/` and the version's folder were the user's, so the user could repoint
+  it, and root wrote its log into the user's `var/log/`. `2-tailscale.sh` now
+  installs it with Tailscale's `tailscaled install-system-daemon`, which copies
+  it to `/usr/local/bin/tailscaled` and writes
+  `com.tailscale.tailscaled` with no log paths (Tailscale's
+  `cmd/tailscaled/install_darwin.go`) *(sourced)*. The state file stays
+  `/Library/Tailscale/tailscaled.state` for both (`paths/paths_unix.go`), so
+  the machine keeps its identity across the switch *(sourced)*.
 
 ### Context: is local worth it *(sourced)*
 
