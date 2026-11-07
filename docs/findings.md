@@ -7,7 +7,7 @@ MacBook Pro 16" (M1 Max, 10-core CPU, 32-core GPU, 64 GB).
 The findings come in three parts:
 
 1. Part 1, [the server](#the-server-splash-for-m1m2-and-qwen38-27b), is the
-   server as it runs now, Splash's M1/M2 port 1.4.0-m1 on its defaults, on
+   server as it runs now, Splash's M1/M2 port 1.5.0-m1 on its defaults, on
    macOS 27.0.1. It covers the settings, startup, speed, idle release, clients,
    known gaps and what is not measured.
 2. Part 2, [the Mac, whatever the engine](#the-mac-whatever-the-engine),
@@ -26,15 +26,16 @@ reproduced here. Everything else was.
 ## The server: Splash for M1/M2 and Qwen3.8-27B
 
 Since 2026-10-18 the server runs
-[paperniuk/splash](https://github.com/paperniuk/splash), since 2026-10-31
-release 1.4.0-m1 (2026-10-24), an unofficial port of [Splash](https://github.com/incoai/splash)
+[paperniuk/splash](https://github.com/paperniuk/splash), since 2026-11-07
+release 1.5.0-m1 (2026-11-01), an unofficial port of [Splash](https://github.com/incoai/splash)
 for M1 and M2. Splash, by Inco, needs an M3 or newer and refuses older GPUs.
 The port adds Metal kernels for Apple7 and Apple8 GPUs (M1, M2), bounded
 prefill commands so that macOS does not abort long prompts
 (`ImpactingInteractivity`), and Neural Engine prefill on M1 and M2
 *(sourced)*. Its author tested it on an M1 Max, not on an M2 *(sourced)*.
-1.4.0-m1 is Splash 1.4.0 with the port's kernels on top *(sourced)*.
-[Upgrade to 1.4.0-m1](#upgrade-to-140-m1) has what the upgrade changed here.
+1.5.0-m1 is Splash 1.5.0 with the port's kernels on top *(sourced)*.
+[Upgrade to 1.5.0-m1](#upgrade-to-150-m1) has what the upgrade changed here,
+and why the server skipped 1.6.0-m1.
 [The move to Splash](#the-move-to-splash) says why the server changed engines.
 
 ### Settings
@@ -130,6 +131,35 @@ context 256K", which is 262,144 tokens, the model's native window. With the
 server idle, wired memory was about 33 GiB, and the engine's resident size
 7.4 GB. Later starts reuse the calibration. A restart was ready 22 s after
 loading began.
+
+### Upgrade to 1.5.0-m1
+
+On 2026-11-07 the server moved from 1.4.0-m1 to 1.5.0-m1 with
+`1-install.sh` and `3-services.sh`. The port's notes measure the 27B MLX
+4-bit on an M1 Max at the same speed as 1.4.0-m1 *(sourced)*. The release's
+changes are for other checkpoints, local model folders (`--model-dir`), and a
+256-row floor for a prefill that runs beside a decode, which can pause a
+decoding client for about 3 s instead of about 1 s *(sourced)*. The
+checkpoint, its draft and every setting stayed the same. The installer's
+SHA-256 matches the release notes, and it differs from 1.4.0-m1's only in its
+version.
+
+The endpoint was down for 68 s, from Splash stopping to "Ready". The build
+calibrated the Neural Engine again, in 41.4 s, and kept share 0.47. Weights
+loaded in 6.3 s. `3-services.sh` passed its checks (200 with the key, 401
+without). Two single-turn chats and a three-turn chat that reused its cached
+prefix answered correctly, with no effort given, at `medium`.
+
+**1.6.0-m1 was tried first and rolled back.** It is the newest release
+(2026-11-06). The same `3-services.sh` checks passed, and then every chat
+but one failed. Splash logged "Engine failed
+· native loop did not answer status within 30 s", answered 503
+`runtime_unavailable`, and restarted the engine, which took about 40 s each
+time. Prompts of 17 and 25 tokens failed. An 11-token prompt passed. This is the port's issue #51: on M1 and M2 a
+request hangs when its last prefill chunk is 17 to 32 rows, and draft PR #52
+has a one-line fix *(sourced)*. The reporters there found 1.5.0-m1 unaffected
+*(sourced)*, and the same 17- and 25-token prompts passed on it here. The
+server stays on 1.5.0-m1 until a release includes the fix.
 
 ### Upgrade to 1.4.0-m1
 
