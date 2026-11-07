@@ -8,9 +8,8 @@ guide, and `docs/findings.md` the measurements behind it. **`NEXT.md`, if
 present, is the state of the machine this checkout runs on and what is left to
 do. Read it first.** It is local to that machine and not tracked.
 
-**On a client machine** (not the server), such as the Omarchy machine that
-uses it, the task is to connect it. Follow `docs/omarchy-client.md` step by
-step. The server's scripts do not run there.
+**On a client machine** (not the server), the task is to connect it. Follow
+`docs/clients.md` step by step. The server's scripts do not run there.
 
 ## Principle
 
@@ -35,9 +34,8 @@ and wait for a release.
   (Splash's LaunchAgent) and the hardening step (pf, sshd, battery watchdog)
   install, with `@PLACEHOLDERS@` filled by `render()` in `lib.sh`. `config.env`
   (gitignored) overrides the defaults in `lib.sh`.
-- `docs/` holds `findings.md`, the measurements and their history;
-  `omarchy-client.md`, the client guide; and `omarchy-desktop.md`, the Mac's
-  desktop and SSH from the client.
+- `docs/` holds `findings.md`, the measurements, and `clients.md`, the guide
+  for connecting a client device.
 
 ## Conventions
 
@@ -78,8 +76,8 @@ and wait for a release.
   (`curl_hdr` in `lib.sh`), and to Splash in `SPLASH_API_KEY`, which the
   LaunchAgent's shell reads from the key file at start.
 - Record results in `docs/findings.md` with what they changed.
-- Only `docs/findings.md` names engines this server no longer runs. Everything
-  else describes the current setup.
+- Every file describes the current setup. Engines and tools the server no
+  longer uses stay in git history, not in the docs.
 - The repository is public, so nothing personal enters any file, commit
   message or PR text: no usernames, real hostnames or tailnet names, the
   machines' IP addresses, home directory paths, or email addresses other than

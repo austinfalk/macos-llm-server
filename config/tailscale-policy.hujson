@@ -9,7 +9,7 @@
 //
 // Defining `grants` makes the tailnet default-deny. Anything not listed below
 // is refused. Keep that in mind if the tailnet has other devices that need to
-// reach each other -- add grants for them too.
+// reach each other, add grants for them too.
 
 {
 	"tagOwners": {
@@ -28,9 +28,6 @@
 				"tcp:443", // the inference endpoint (tailscale serve)
 				"tcp:22",  // SSH, if Remote Login is on
 				"tcp:5900", // Screen Sharing, if on (README, step 6)
-				// Sunshine, if installed (docs/omarchy-desktop.md, step 2). Its web
-				// UI, 47990, stays out: it is reached through SSH.
-				"tcp:47984", "tcp:47989", "tcp:48010", "udp:47998-48000",
 			],
 		},
 	],

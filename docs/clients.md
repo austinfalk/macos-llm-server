@@ -1,13 +1,11 @@
-# Using the server from an Omarchy (Linux) machine
+# Using the server from another machine
 
-How to connect an [Omarchy](https://omarchy.org) machine to the server and use
-it from Claude Code, Codex, Hermes Agent and OpenCode. Written to be followed
-step by step, by a person or by a Claude Code session running in a clone of
-this repository on the Omarchy machine. Last followed on Omarchy 4.0.5 with
-Claude Code 2.1.302, Codex 0.163.0, Hermes Agent 0.21.1 (as
-`hermes-desktop 2026.9.7-5` installs it) and OpenCode 2.0.32, with the server
-on Splash's M1/M2 port 1.3.2-m1.1 (October 2026). The Mac's desktop and SSH to
-the server are in [omarchy-desktop.md](omarchy-desktop.md).
+How to connect a Linux or macOS machine to the server and use it from Claude
+Code, Codex, Hermes Agent and OpenCode. Written to be followed step by step, by
+a person or by a Claude Code session running in a clone of this repository on
+the client machine. Last followed on a Linux client with Claude Code 2.1.302,
+Codex 0.163.0, Hermes Agent 0.21.1 and OpenCode 2.0.32, with the server on
+Splash's M1/M2 port 1.3.2-m1.1 (October 2026).
 
 **If you are Claude Code following this:** do one step at a time and run its
 check before the next. If a check fails, or a command, flag or config key does
@@ -51,12 +49,9 @@ You need these from the server's owner:
 
 - The server set up and verified (the [README](../README.md), steps 1-7).
 - A Tailscale login that the server's tailnet policy names (README, step 2).
-- The API key in 1Password, as an *API Credential* item named
-  `LLM server API key` in the Private vault, so that its secret reference is
-  `op://Private/LLM server API key/credential`. The key is the one line of
-  `~/.config/llm-server/api-key` on the server, without its newline. The owner
-  creates the item with `op item create` reading it from stdin, so the key
-  never reaches a command line.
+- A way to read the API key, the one line of `~/.config/llm-server/api-key`
+  on the server: a password manager with a command-line tool, or SSH to the
+  server on the tailnet. Step 2 uses either.
 
 ## What works
 
@@ -67,7 +62,7 @@ You need these from the server's owner:
 | Hermes Agent (desktop app and `hermes`) | General agent work: research, writing, running commands, long tasks you check on later | chat completions | 5 |
 | OpenCode (`opencode`) | Coding in a repository, from the terminal | chat completions | 6 |
 
-All four passed step 7 from this machine on 2026-10-18 with these settings,
+All four passed step 7 from a Linux client on 2026-10-18 with these settings,
 after working with an earlier version of them
 ([findings](findings.md#the-server-splash-for-m1m2-and-qwen38-27b)). The one
 failure was a `claude-local` turn that thought for more than 10 minutes, which
@@ -79,13 +74,13 @@ key from step 2, and the model ID above.
 
 - **The first turn is the slow one.** The server reads a new prompt at about
   6 s per thousand tokens, and an agent's first prompt is 8-20K tokens of
-  instructions and tool definitions. From this machine, the first turn started
-  writing after 56 s in OpenCode (8,528 tokens), 61 s in Hermes (12,177),
-  112 s in Claude Code (20,109) and 135 s in Codex (18,600). The server then
-  caches the conversation and reads only what is new. A follow-up starts in
-  about 2 s, or later when a tool result adds text: about 7,000 new tokens
-  took 40-46 s. It writes at 23-38 tokens a second, slower as a conversation
-  grows, so hand it tasks you can walk away from.
+  instructions and tool definitions. From a Linux client, the first turn
+  started writing after 56 s in OpenCode (8,528 tokens), 61 s in Hermes
+  (12,177), 112 s in Claude Code (20,109) and 135 s in Codex (18,600). The
+  server then caches the conversation and reads only what is new. A follow-up
+  starts in about 2 s, or later when a tool result adds text: about 7,000 new
+  tokens took 40-46 s. It writes at 23-38 tokens a second, slower as a
+  conversation grows, so hand it tasks you can walk away from.
 - **Keep conversations going.** A new session, a changed system prompt or tool
   set, or an edit to an earlier message makes the server read again from the
   first change. Every MCP server and tool adds to every prompt, so turn off
@@ -118,10 +113,9 @@ Splash renders `high` as `xhigh` for this template. For `high` on one task:
 
 ## 1. Tailscale
 
-Omarchy menu → **Install → Service → Tailscale**. It installs the package,
-enables `tailscaled`, runs `tailscale up`, and lets your user run `tailscale`
-without sudo. Log in with the **same account** as the server, which the
-tailnet policy grants. Then approve the new device in the admin console.
+Install Tailscale as [its download page](https://tailscale.com/download) says
+for this platform, and log in with the **same account** as the server, which
+the tailnet policy grants. Then approve the new device in the admin console.
 
 **Check:**
 
@@ -132,18 +126,34 @@ tailscale ping <machine>         # "via <LAN address>" = direct; "via DERP" = re
 
 ## 2. The API key
 
+Every tool below reads the key from one file, `~/.config/llm-server/api-key`,
+which holds the key alone with no trailing newline. OpenCode reads the file as
+it is, and would send a newline as part of the key. Write the file from a
+command that prints the key, so that the key never reaches a command line or
+your shell history:
+
 ```sh
 mkdir -p ~/.config/llm-server && chmod 700 ~/.config/llm-server
+```
+
+From 1Password, if the key is an *API Credential* item named
+`LLM server API key` in the Private vault:
+
+```sh
 ( umask 077; op read --no-newline "op://Private/LLM server API key/credential" > ~/.config/llm-server/api-key.new ) \
   && mv ~/.config/llm-server/api-key.new ~/.config/llm-server/api-key
 ```
 
-Writing to a new file first keeps the old key in place if `op` fails, for
-example when 1Password is locked.
+Or over SSH, from the server's own file:
 
-OpenCode reads the file as it is, and would send a trailing newline as part of
-the key, hence `--no-newline`. Every tool below reads this one file, so when
-the server's key changes, run the command again and nothing else.
+```sh
+( umask 077; ssh <machine> 'tr -d "\n" < ~/.config/llm-server/api-key' > ~/.config/llm-server/api-key.new ) \
+  && mv ~/.config/llm-server/api-key.new ~/.config/llm-server/api-key
+```
+
+Writing to a new file first keeps the old key in place if the command fails,
+for example when 1Password is locked. When the server's key changes, run the
+command again and nothing else.
 
 **Check.** The key goes to curl on stdin, never on its command line:
 
@@ -157,12 +167,14 @@ Expected: `"id": "mlx-community/Qwen3.8-27B-4bit"`. Without the key,
 
 ## 3. Claude Code, beside your normal login
 
-Omarchy ships `claude` as a launcher that installs on first run. Keep your
-normal Anthropic login as plain `claude`, and add `claude-local`, which uses a
-**separate config directory** with its own settings, history, CLAUDE.md and
-MCP servers, so the two cannot affect each other.
+Install Claude Code as [its setup page](https://code.claude.com/docs/en/setup)
+says. Keep your normal Anthropic login as plain `claude`, and add
+`claude-local`, which uses a **separate config directory** with its own
+settings, history, CLAUDE.md and MCP servers, so the two cannot affect each
+other.
 
-`~/.local/bin/claude-local` (then `chmod 755`):
+`~/.local/bin/claude-local`, or another directory on your `PATH` (then
+`chmod 755`):
 
 ```sh
 #!/bin/sh
@@ -246,6 +258,8 @@ stop it and run the check again.
 
 ## 4. Codex
 
+Install Codex as [its README](https://github.com/openai/codex) says.
+
 Run Codex from a trusted directory (a git repository you have opened before),
 or its check stops before reaching the server. Codex needs the Responses API,
 which the server has. Do not use `codex --oss`, which expects a local Ollama.
@@ -293,19 +307,9 @@ because the profile sets the window and compaction itself.
 
 ## 5. Hermes Agent
 
-Install **Hermes Desktop**, which also provides the `hermes` command. It needs
-`sudo`, so the user runs `omarchy install ai hermes` (Install → AI → Hermes
-Desktop in the menu). `omarchy install hermes cli` installs the same app
-without opening it. The app installs Hermes from git under
-`~/.hermes/hermes-agent`, pinned to the release the package was built from:
-`hermes-desktop 2026.9.7-5` gives Hermes 0.21.1.
-
-**Do not update Hermes**, neither with the app's *Check for updates* nor with
-`hermes update`. Let it change only when an Omarchy update brings a newer
-`hermes-desktop`. The backend updates without the app, and the mismatch breaks
-it: approvals and `clarify` stop reaching the app after 0.21.3 (omarchy
-#12760), and on current `main` the launcher crashes before opening a window
-(omarchy-pkgs #670).
+Install Hermes Agent as [its README](https://github.com/NousResearch/hermes-agent)
+says, which gives the `hermes` command. Its desktop app, Hermes Desktop, is
+optional.
 
 **Remove borrowed credentials.** On first run Hermes imports what it finds,
 such as a Copilot credential from the `gh` CLI's login. `hermes auth list`
@@ -353,8 +357,8 @@ Later versions ignore the setting. On 0.21.0 or older, add `max_tokens: 32768`
 under `model:`, where the launcher puts it. The launcher's `model:` names the
 endpoint itself (`provider: custom`), though, and whether Hermes reads
 `model.max_tokens` when `model.provider` names an entry under `providers:` has
-not been checked. Confirm it in the source under `~/.hermes/hermes-agent`. If
-Hermes reads the limit elsewhere, tell the user.
+not been checked. Confirm it in the installed Hermes's source. If Hermes reads
+the limit elsewhere, tell the user.
 
 Why each, checked against the 0.21.1 source:
 
@@ -390,11 +394,13 @@ sqlite3 ~/.hermes/state.db \
 
 Every row should show `ENDPOINT/v1`. Before its first request, Hermes asks for
 Ollama's `POST /api/show`, which Splash answers with 404. Hermes goes on
-without it, so that 404 is harmless. Then open Hermes from the app menu and
+without it, so that 404 is harmless. If you use the desktop app, open it and
 ask for a harmless command that needs approval: the prompt must appear in the
 app.
 
 ## 6. OpenCode
+
+Install OpenCode as [its docs](https://opencode.ai/docs) say.
 
 `~/.config/opencode/opencode.json` (OpenCode reads the key file itself):
 
@@ -443,9 +449,9 @@ app.
 }
 ```
 
-Keep any keys already in the file (Omarchy's has `theme` and `autoupdate`).
-If it has an `agent` section, keep each agent's other settings and set its
-`model`. Plain `opencode` then uses the server.
+Keep any keys already in the file. If it has an `agent` section, keep each
+agent's other settings and set its `model`. Plain `opencode` then uses the
+server.
 
 Why each, checked against OpenCode 1.18.34's config schema. OpenCode 2.0.32
 reads the same file and converts it, and `opencode debug config` shows the
@@ -491,8 +497,7 @@ is harmless. It exits with 0 even after an error, so read its output.
 2. **The OpenCode model ID.** `opencode models | grep '^tailnet/'` should list
    `tailnet/mlx-community/Qwen3.8-27B-4bit`, and step 6's check should have
    answered. If OpenCode reports the model as unknown, stop and tell the user.
-3. **Effort.** Ask the user to run this on the server, or over SSH
-   ([omarchy-desktop.md](omarchy-desktop.md), step 3):
+3. **Effort.** Ask the user to run this on the server, or over SSH:
 
    ```sh
    grep Started ~/Library/Logs/llm-server/splash.log | tail -20
@@ -509,6 +514,4 @@ is harmless. It exits with 0 even after an error, so read its output.
    anything refused, dropped or sent again, and how long turns take to start
    as it grows.
 5. **Report** to the user, for `docs/findings.md`: what passed and what
-   failed, each client's times from item 1, and the long session's. Commit
-   changes to this repository only if commit signing works on this machine
-   (AGENTS.md). Otherwise leave them for the user.
+   failed, each client's times from item 1, and the long session's.

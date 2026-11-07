@@ -25,7 +25,6 @@ fi
 : "${LLM_USER:=${SUDO_USER:-$(id -un)}}"
 : "${LLM_MODEL:=mlx-community/Qwen3.8-27B-4bit}"
 : "${LLM_TAG:=tag:llm-server}"
-: "${LLM_SSH_TAILNET_ONLY:=yes}"
 : "${LLM_BATTERY_SHUTDOWN_PCT:=15}"
 : "${LLM_DISABLE_SLEEP:=no}"
 
@@ -43,6 +42,13 @@ SPLASH_LOG=$LLM_HOME/Library/Logs/llm-server/splash.log
 # Splash's default port: the LaunchAgent passes no --port.
 LLM_PORT=8000
 
+# Installed by 2-tailscale.sh, at the paths Tailscale's own installer uses.
+TAILSCALED=/usr/local/bin/tailscaled
+L_TAILSCALED=com.tailscale.tailscaled
+P_TAILSCALED=/Library/LaunchDaemons/$L_TAILSCALED.plist
+L_BREW_TAILSCALED=sh.brew.tailscale
+P_BREW_TAILSCALED=/Library/LaunchDaemons/$L_BREW_TAILSCALED.plist
+
 # Installed by 4-harden.sh. Services never point into this git checkout.
 LLM_SBIN=/usr/local/sbin
 LLM_ETC=/usr/local/etc/llm-server
@@ -51,16 +57,18 @@ L_WATCHDOG=com.llmserver.batterywatchdog
 L_PF=com.llmserver.pf
 P_WATCHDOG=/Library/LaunchDaemons/$L_WATCHDOG.plist
 P_PF=/Library/LaunchDaemons/$L_PF.plist
-# pf rules for Screen Sharing and Sunshine live in an anchor under com.apple/,
-# which the stock /etc/pf.conf already evaluates.
+# pf rules for Screen Sharing live in an anchor under com.apple/, which the
+# stock /etc/pf.conf already evaluates.
 PF_ANCHOR=com.apple/250.llm-server
 
 # --- output -----------------------------------------------------------------
-step() { printf '\n== %s\n' "$*"; }
-ok()   { printf '  ok    %s\n' "$*"; }
-info() { printf '        %s\n' "$*"; }
-warn() { printf '  WARN  %s\n' "$*" >&2; }
-bad()  { printf '  FAIL  %s\n' "$*" >&2; }
+# A terminal that went away, such as an SSH session dropped while 2-tailscale.sh
+# restarts the tailnet, must not stop a script halfway under set -e.
+step() { printf '\n== %s\n' "$*" || :; }
+ok()   { printf '  ok    %s\n' "$*" || :; }
+info() { printf '        %s\n' "$*" || :; }
+warn() { printf '  WARN  %s\n' "$*" >&2 || :; }
+bad()  { printf '  FAIL  %s\n' "$*" >&2 || :; }
 die()  { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 
 need_root() { [ "$(id -u)" = 0 ] || die "run with sudo: sudo sh $0"; }
@@ -69,6 +77,21 @@ need_user() { [ "$(id -u)" != 0 ] || die "run as your normal user, without sudo"
 check_user() {
 	[ "$LLM_USER" != root ] || die "LLM_USER resolved to root. Run via sudo from your own account, or set LLM_USER in config.env."
 	[ -n "$LLM_HOME" ] && [ -d "$LLM_HOME" ] || die "no home directory found for user '$LLM_USER'"
+}
+
+# The executable of every tailscaled process, one per line.
+tailscaled_paths() {
+	for _p in $(pgrep -x tailscaled); do ps -o command= -p "$_p" | awk '{print $1}'; done | sort -u
+}
+
+# root_only PATH...: each is owned by root and writable by nobody else, so no
+# other account can swap what root runs or reads from it.
+root_only() {
+	for _d in "$@"; do
+		[ -e "$_d" ] || continue
+		[ "$(stat -f %Su "$_d")" = root ] && [ -z "$(find "$_d" -maxdepth 0 \( -perm -020 -o -perm -002 \))" ] \
+			|| return 1
+	done
 }
 
 # --- machine facts ------------------------------------------------------------
@@ -124,6 +147,15 @@ start_job() {  # domain label plist
 	done
 	launchctl bootstrap "$1" "$3"   # once more, unmuted, to show the error
 	return 1
+}
+
+# pf expands the port list into one rule per port, and drops nothing unless pf
+# itself is enabled.
+pf_loaded() {
+	_r=$(pfctl -a "$PF_ANCHOR" -sr 2>/dev/null)
+	printf '%s\n' "$_r" | grep -q 'block drop in quick proto tcp.*port = 5900$' \
+		&& printf '%s\n' "$_r" | grep -q 'block drop in quick proto tcp.*port = 88$' \
+		&& pfctl -s info 2>/dev/null | grep -q 'Status: Enabled'
 }
 
 json_value() { printf '%s' "$1" | plutil -extract "$2" raw -o - - 2>/dev/null || :; }
