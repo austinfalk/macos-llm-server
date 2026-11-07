@@ -13,9 +13,9 @@ variant_values() {
 		port)
 			# The installer keeps each version under SPLASH_HOME and points
 			# `current` and the splash-m1 command at the newest.
-			SPLASH_VERSION=1.4.0-m1
+			SPLASH_VERSION=1.5.0-m1
 			SPLASH_INSTALLER_URL=https://github.com/paperniuk/splash/releases/download/$SPLASH_VERSION/install-m1.sh
-			SPLASH_INSTALLER_SHA256=9e61b9d3a3a1a3646170df628c14beb52abe1b59babea2710c5991c228a1ad17
+			SPLASH_INSTALLER_SHA256=05393d888a0f626ec91d9ac42d85e03ae876265a54f97785327181927b8bc1e0
 			SPLASH_HOME="$LLM_HOME/Library/Application Support/Splash-M1"
 			SPLASH_BIN=$BREW_PREFIX/bin/splash-m1
 			SPLASH_RUN_DIR=$SPLASH_HOME
