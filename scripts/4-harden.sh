@@ -67,7 +67,7 @@ Disabling passwords now would lock you out. Add a public key there first, then r
 	# whose sshd_config does not include the drop-in directory, would quietly
 	# override this one. Check what sshd will actually apply.
 	for opt in passwordauthentication kbdinteractiveauthentication; do
-		v=$(/usr/sbin/sshd -T 2>/dev/null | awk -v o="$opt" '$1 == o {print $2}')
+		v=$(/usr/sbin/sshd -T 2>/dev/null | awk -v o="$opt" 'tolower($1) == o {print $2}')
 		[ -n "$v" ] || die "could not read sshd's effective settings (sshd -T)"
 		[ "$v" = no ] || die "sshd still allows $opt: another setting in /etc/ssh overrides $DROPIN"
 	done

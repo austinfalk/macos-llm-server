@@ -500,6 +500,12 @@ otherwise.
   pattern first: `Match Address *,!100.64.0.0/10,...`. Caught by
   `verify.sh`, which asks `sshd -T -C` what it would apply to a LAN address
   rather than trusting the file.
+- **OpenSSH 10.5 prints `sshd -T` keywords in mixed case**
+  (`PasswordAuthentication no`, not `passwordauthentication no`), as on this
+  Mac with macOS 27.2. `verify.sh` and `4-harden.sh` matched the lowercase
+  names, so on 2026-11-07 `verify.sh` failed both password checks with an
+  empty value while sshd still refused passwords. Both scripts now compare the keyword in any
+  case.
 - **`/etc/kcpassword`** holds the auto-login password, obfuscated with a
   published key.
 - **pf filters loopback.** Rules that pass only tailnet sources also drop
