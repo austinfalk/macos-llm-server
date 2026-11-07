@@ -13,29 +13,48 @@ check_user
 backend() { tailscale status --json 2>/dev/null | plutil -extract BackendState raw -o - - 2>/dev/null; }
 
 step "Tailscale daemon"
-# Tailscale's own installer copies tailscaled to /usr/local/bin, which root owns,
-# and runs it at boot, before anyone logs in: Screen Sharing at the login
-# window, and SSH, work over it after a restart. Run as root from Homebrew's
-# prefix instead, which the user owns, anything running as the user could swap
-# the binary and become root at its next start.
-OLD_PLIST=/Library/LaunchDaemons/sh.brew.tailscale.plist
-if [ ! -f "$TAILSCALED_PLIST" ] || ! cmp -s "$BREW_PREFIX/bin/tailscaled" "$TAILSCALED"; then
-	# The tailnet is down until the new daemon starts. Ignore the hangup of an
+# tailscaled runs as root, at boot once FileVault has unlocked the disk, so the
+# tailnet is up at the login window: Screen Sharing and SSH work over it after
+# a restart. It runs from a root-owned copy, not Homebrew's prefix, which the
+# user owns: there, anything running as the user could swap the binary and
+# become root at its next start.
+[ -x "$BREW_PREFIX/bin/tailscaled" ] || die "no tailscaled in $BREW_PREFIX/bin: run scripts/1-install.sh first"
+[ "$BREW_PREFIX" != /usr/local ] || die "Homebrew is in /usr/local, where it would own $TAILSCALED. Use Homebrew in /opt/homebrew."
+mkdir -p "$(dirname "$TAILSCALED")"
+root_only /usr/local "$(dirname "$TAILSCALED")" || die "/usr/local or $(dirname "$TAILSCALED") is not root's alone, so another account could replace tailscaled. Fix it with:
+    sudo chown root:wheel /usr/local $(dirname "$TAILSCALED") && sudo chmod go-w /usr/local $(dirname "$TAILSCALED")"
+if [ -f "$P_BREW_TAILSCALED" ] || job_loaded "system/$L_BREW_TAILSCALED" \
+	|| ! job_loaded "system/$L_TAILSCALED" \
+	|| [ -L "$TAILSCALED" ] || ! cmp -s "$BREW_PREFIX/bin/tailscaled" "$TAILSCALED" \
+	|| ! cmp -s "$LLM_REPO/config/$L_TAILSCALED.plist" "$P_TAILSCALED"; then
+	# The tailnet is down until the new daemon answers. Ignore the hangup of an
 	# SSH session that drops with it, so the script finishes the switch.
 	trap '' HUP
-	if [ -f "$OLD_PLIST" ]; then
-		launchctl bootout system/sh.brew.tailscale 2>/dev/null || :
-		rm -f "$OLD_PLIST"
+	SWITCHING=yes
+	trap '[ "${SWITCHING:-}" != yes ] || printf "\nThe tailnet is down: tailscaled did not come back. Re-run this script, or bring back the Homebrew daemon:\n    sudo brew services start tailscale\n" >&2' EXIT
+	if [ -f "$P_BREW_TAILSCALED" ] || job_loaded "system/$L_BREW_TAILSCALED"; then
+		stop_job "system/$L_BREW_TAILSCALED" || :
+		rm -f "$P_BREW_TAILSCALED"
 		# `sudo brew services` left these root-owned, which blocks brew cleanup.
 		chown -R -h "$LLM_USER:admin" "$BREW_PREFIX/Cellar/tailscale" "$BREW_PREFIX/opt/tailscale" "$BREW_PREFIX/var/log/tailscaled.log" 2>/dev/null || :
 	fi
-	"$BREW_PREFIX/bin/tailscaled" install-system-daemon || die "tailscaled install-system-daemon failed. The tailnet is down: re-run this script."
-	trap - HUP
+	stop_job "system/$L_TAILSCALED" || :
+	n=0
+	while pgrep -x tailscaled >/dev/null && [ $n -lt 40 ]; do sleep 0.5; n=$((n + 1)); done
+	! pgrep -x tailscaled >/dev/null || die "the old tailscaled did not stop"
+	install -S -o root -g wheel -m 755 "$BREW_PREFIX/bin/tailscaled" "$TAILSCALED" || die "could not copy tailscaled to $TAILSCALED"
+	render "$L_TAILSCALED.plist" "$P_TAILSCALED" 644 root:wheel
+	start_job system "$L_TAILSCALED" "$P_TAILSCALED" || die "tailscaled did not start"
 fi
 n=0
-while [ -z "$(backend)" ] && [ $n -lt 30 ]; do sleep 1; n=$((n + 1)); done
-[ -n "$(backend)" ] || die "tailscaled did not start. Check: sudo launchctl print system/com.tailscale.tailscaled"
-ok "tailscaled answering from $TAILSCALED (state: $(backend))"
+until case $(backend) in Running | NeedsLogin | NeedsMachineAuth | Stopped) true ;; *) false ;; esac; do
+	n=$((n + 1))
+	[ $n -lt 30 ] || die "tailscaled did not answer. Check: sudo launchctl print system/$L_TAILSCALED"
+	sleep 1
+done
+[ "$(tailscaled_paths)" = "$TAILSCALED" ] || die "tailscaled runs from $(tailscaled_paths | tr '\n' ' '), not only $TAILSCALED"
+SWITCHING=no
+ok "tailscaled runs from $TAILSCALED and restarts if it exits (state: $(backend))"
 
 step "Tailnet membership"
 if [ "$(backend)" != Running ]; then

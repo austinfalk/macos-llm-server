@@ -42,9 +42,12 @@ SPLASH_LOG=$LLM_HOME/Library/Logs/llm-server/splash.log
 # Splash's default port: the LaunchAgent passes no --port.
 LLM_PORT=8000
 
-# Installed by `tailscaled install-system-daemon` (2-tailscale.sh).
+# Installed by 2-tailscale.sh, at the paths Tailscale's own installer uses.
 TAILSCALED=/usr/local/bin/tailscaled
-TAILSCALED_PLIST=/Library/LaunchDaemons/com.tailscale.tailscaled.plist
+L_TAILSCALED=com.tailscale.tailscaled
+P_TAILSCALED=/Library/LaunchDaemons/$L_TAILSCALED.plist
+L_BREW_TAILSCALED=sh.brew.tailscale
+P_BREW_TAILSCALED=/Library/LaunchDaemons/$L_BREW_TAILSCALED.plist
 
 # Installed by 4-harden.sh. Services never point into this git checkout.
 LLM_SBIN=/usr/local/sbin
@@ -59,11 +62,13 @@ P_PF=/Library/LaunchDaemons/$L_PF.plist
 PF_ANCHOR=com.apple/250.llm-server
 
 # --- output -----------------------------------------------------------------
-step() { printf '\n== %s\n' "$*"; }
-ok()   { printf '  ok    %s\n' "$*"; }
-info() { printf '        %s\n' "$*"; }
-warn() { printf '  WARN  %s\n' "$*" >&2; }
-bad()  { printf '  FAIL  %s\n' "$*" >&2; }
+# A terminal that went away, such as an SSH session dropped while 2-tailscale.sh
+# restarts the tailnet, must not stop a script halfway under set -e.
+step() { printf '\n== %s\n' "$*" || :; }
+ok()   { printf '  ok    %s\n' "$*" || :; }
+info() { printf '        %s\n' "$*" || :; }
+warn() { printf '  WARN  %s\n' "$*" >&2 || :; }
+bad()  { printf '  FAIL  %s\n' "$*" >&2 || :; }
 die()  { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 
 need_root() { [ "$(id -u)" = 0 ] || die "run with sudo: sudo sh $0"; }
@@ -72,6 +77,21 @@ need_user() { [ "$(id -u)" != 0 ] || die "run as your normal user, without sudo"
 check_user() {
 	[ "$LLM_USER" != root ] || die "LLM_USER resolved to root. Run via sudo from your own account, or set LLM_USER in config.env."
 	[ -n "$LLM_HOME" ] && [ -d "$LLM_HOME" ] || die "no home directory found for user '$LLM_USER'"
+}
+
+# The executable of every tailscaled process, one per line.
+tailscaled_paths() {
+	for _p in $(pgrep -x tailscaled); do ps -o command= -p "$_p" | awk '{print $1}'; done | sort -u
+}
+
+# root_only PATH...: each is owned by root and writable by nobody else, so no
+# other account can swap what root runs or reads from it.
+root_only() {
+	for _d in "$@"; do
+		[ -e "$_d" ] || continue
+		[ "$(stat -f %Su "$_d")" = root ] && [ -z "$(find "$_d" -maxdepth 0 \( -perm -020 -o -perm -002 \))" ] \
+			|| return 1
+	done
 }
 
 # --- machine facts ------------------------------------------------------------

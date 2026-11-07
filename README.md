@@ -164,11 +164,16 @@ sudo sh scripts/2-tailscale.sh
 ```
 
 The script runs Tailscale as a system daemon, so the tailnet is up at boot,
-before anyone logs in, and you can reach the login window remotely. It uses
-Tailscale's own installer, `tailscaled install-system-daemon`, which copies
-the daemon to `/usr/local/bin`, where only root can change it. Homebrew's
-folders belong to your account, and a daemon root runs from there could be
-swapped by anything running as you. The first
+before anyone logs in, and you can reach the login window remotely. It copies
+Homebrew's `tailscaled` to `/usr/local/bin`, where only root can change it,
+and runs it from there with a launchd job that restarts it if it exits.
+Homebrew's folders belong to your account, so a daemon root ran from there
+could be swapped by anything running as you. The job uses the label and paths
+of Tailscale's own installer, so `sudo /usr/local/bin/tailscaled
+uninstall-system-daemon` removes it. If the Mac ran Homebrew's
+`sudo brew services` daemon before, the script replaces it, and the tailnet
+drops for a few seconds. Run it at the Mac, or in a terminal session that
+survives a dropped connection, such as tmux. The first
 time, it prints a login URL. Open it, and approve the machine in the admin
 console. The script joins with the `tag:llm-server` tag, and tagged devices
 never have their keys expire. It also makes your account Tailscale's operator,

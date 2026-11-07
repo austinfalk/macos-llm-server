@@ -482,12 +482,16 @@ Found by 2026-10-03, except where an item says otherwise.
   `/opt/homebrew/opt/tailscale/bin/tailscaled`. The binary was root's, but
   `opt/` and the version's folder were the user's, so the user could repoint
   it, and root wrote its log into the user's `var/log/`. `2-tailscale.sh` now
-  installs it with Tailscale's `tailscaled install-system-daemon`, which copies
-  it to `/usr/local/bin/tailscaled` and writes
-  `com.tailscale.tailscaled` with no log paths (Tailscale's
-  `cmd/tailscaled/install_darwin.go`) *(sourced)*. The state file stays
-  `/Library/Tailscale/tailscaled.state` for both (`paths/paths_unix.go`), so
-  the machine keeps its identity across the switch *(sourced)*.
+  copies it to `/usr/local/bin/tailscaled` and runs it from a
+  `com.tailscale.tailscaled` job with no log paths. Tailscale's own
+  `tailscaled install-system-daemon` does nearly the same, but its job does
+  not restart tailscaled if it exits, and it always restarts the daemon
+  (`cmd/tailscaled/install_darwin.go`) *(sourced)*, so the script does not use
+  it. The state file stays `/Library/Tailscale/tailscaled.state` for both
+  (`paths/paths_unix.go`), so the machine keeps its identity across the switch
+  *(sourced)*. Root still copies the binary from Homebrew's prefix when the
+  script runs, the same trust as running the scripts from a checkout the user
+  owns.
 
 ### Context: is local worth it *(sourced)*
 

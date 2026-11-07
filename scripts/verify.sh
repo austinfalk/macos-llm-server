@@ -37,12 +37,17 @@ else
 	pass "tailnet only (no Funnel)"
 fi
 # Root runs tailscaled, so no other account may be able to change it.
-ts_cmd=$(ps -o command= -p "$(pgrep -x tailscaled | head -1)" 2>/dev/null | awk '{print $1}')
-if [ "$ts_cmd" = "$TAILSCALED" ] && [ ! -L "$TAILSCALED" ] && [ "$(stat -f %Su "$TAILSCALED")" = root ] \
-	&& [ ! -f /Library/LaunchDaemons/sh.brew.tailscale.plist ]; then
-	pass "tailscaled runs from $TAILSCALED, owned by root"
+ts_paths=$(tailscaled_paths)
+if [ "$ts_paths" = "$TAILSCALED" ] && [ ! -L "$TAILSCALED" ] \
+	&& root_only /usr/local "$(dirname "$TAILSCALED")" "$TAILSCALED" && [ ! -f "$P_BREW_TAILSCALED" ]; then
+	pass "tailscaled runs from $TAILSCALED, which only root can change"
 else
-	fail "tailscaled runs from ${ts_cmd:-nowhere}, not root's $TAILSCALED (re-run scripts/2-tailscale.sh)"
+	fail "tailscaled runs from $(printf '%s' "${ts_paths:-nowhere}" | tr '\n' ' '), not only a root-owned $TAILSCALED (re-run scripts/2-tailscale.sh)"
+fi
+if cmp -s "$LLM_REPO/config/$L_TAILSCALED.plist" "$P_TAILSCALED"; then
+	pass "tailscaled restarts if it exits ($P_TAILSCALED)"
+else
+	fail "$P_TAILSCALED is not this repo's, which restarts tailscaled if it exits (re-run scripts/2-tailscale.sh)"
 fi
 
 step "Splash"

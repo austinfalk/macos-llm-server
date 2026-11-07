@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Rendered by scripts/2-tailscale.sh. The label and paths are the ones
+     Tailscale's own `tailscaled install-system-daemon` uses, so its
+     `uninstall-system-daemon` removes this too. Unlike its plist, this one
+     restarts tailscaled if it exits. The binary path must match TAILSCALED in
+     scripts/lib.sh. No log paths: root would write them. -->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.tailscale.tailscaled</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/bin/tailscaled</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+</dict>
+</plist>

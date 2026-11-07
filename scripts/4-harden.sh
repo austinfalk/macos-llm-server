@@ -15,12 +15,16 @@ mkdir -p "$LLM_LOGS"
 chown root:wheel "$LLM_LOGS"
 chmod 755 "$LLM_LOGS"
 mkdir -p "$LLM_ETC" "$LLM_SBIN"
+root_only /usr/local "$LLM_ETC" "$LLM_SBIN" || die "/usr/local, $LLM_ETC or $LLM_SBIN is not root's alone, so another account could change what root runs from it. Fix it with:
+    sudo chown root:wheel /usr/local $LLM_ETC $LLM_SBIN && sudo chmod go-w /usr/local $LLM_ETC $LLM_SBIN"
 
 step "FileVault"
 # Turning it on asks for the account password and prints a recovery key, so it
 # is a step for a person, not this script.
 if fdesetup status 2>/dev/null | grep -q 'is On'; then
 	ok "on"
+	info "After a restart the Mac waits for the password at the Mac itself, with"
+	info "no network. 'sudo fdesetup authrestart' unlocks the next boot once."
 else
 	warn "off: anyone holding the Mac can read its disk. Turn it on:"
 	warn "    sudo fdesetup enable"
@@ -83,15 +87,15 @@ step "Screen Sharing: tailnet only"
 # Installed whether or not Screen Sharing is on, so turning it on later is safe.
 render pf-screensharing.conf "$LLM_ETC/pf-screensharing.conf" 644 root:wheel
 render com.llmserver.pf.plist "$P_PF" 644 root:wheel
-# A one-shot job: restarting it reloads the rules.
+# The job enables pf and loads the rules at every boot. Load them here too, so
+# the check below sees this file's rules, not whatever the anchor held before.
 start_job system "$L_PF" "$P_PF" || die "the pf job did not start"
+pf_off="the firewall rules did not load. Screen Sharing, if on, is reachable from the local network. Turn it off (System Settings > General > Sharing) until this passes."
+pfctl -a "$PF_ANCHOR" -f "$LLM_ETC/pf-screensharing.conf" 2>/dev/null || die "$pf_off"
 n=0
 until pf_loaded; do
 	n=$((n + 1))
-	if [ $n -ge 10 ]; then
-		tail -5 "$LLM_LOGS/pf.err.log" 2>/dev/null | sed 's/^/        pf: /'
-		die "the firewall rules did not load. Screen Sharing, if on, is reachable from the local network. Turn it off (System Settings > General > Sharing) until this passes."
-	fi
+	[ $n -lt 10 ] || die "$pf_off"
 	sleep 1
 done
 if lsof -nP -iTCP:5900 -sTCP:LISTEN >/dev/null 2>&1; then

@@ -66,7 +66,7 @@ cat <<LEFT
   logs             $SPLASH_LOG, $LLM_LOGS
   Splash           $splash
   Splash's data    $LLM_HOME/Library/Application Support/Splash
-  packages         sudo tailscaled uninstall-system-daemon, then brew uninstall tailscale
+  packages         sudo $TAILSCALED uninstall-system-daemon, then brew uninstall tailscale
   tailnet          sudo tailscale logout
   power settings   pmset -g custom   (these are ordinary macOS settings)
   FileVault        left as it is
