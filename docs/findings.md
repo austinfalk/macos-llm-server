@@ -478,6 +478,18 @@ Found by 2026-10-03, except where an item says otherwise.
   [Six Colors](https://sixcolors.com/post/2026/05/filevault-keys-cant-be-escrowed-in-iCloud-anymore/)
   reports Settings and Passwords out of step with the Mac's key before, fixed
   by turning FileVault off and on in Settings *(sourced)*.
+- **Splash's `--allowed-host` ignores the port** (2026-11-11, 1.5.0-m1).
+  With `--allowed-host <machine>.<tailnet>.ts.net`, requests to
+  `127.0.0.1:8000` with that `Host` header and no port, `:443`, or `:8443`
+  all got 200, and another host got 403. So serving the endpoint on another
+  HTTPS port (`LLM_HTTPS_PORT`) needs no change to the LaunchAgent.
+- **`autogroup:self` leaves out tagged devices** (2026-11-11). With a policy
+  whose only grant is `autogroup:member` to `autogroup:self`, a client's
+  packet filter (`tailscale debug netmap`) accepted the member's own devices
+  but not the server while it carried `tag:llm-server`. After the server
+  logged in again untagged, as the member's device, the filter listed it. So
+  the policy template grants by ownership, and `2-tailscale.sh` refuses a
+  tagged machine when `LLM_TAG` is empty.
 - **pf filters loopback.** Rules that pass only tailnet sources also drop
   connections from 127.0.0.1, so Screen Sharing's port never answers on the
   Mac itself. A connection to the machine's own LAN address comes from that

@@ -102,12 +102,14 @@ In the [Tailscale admin console](https://login.tailscale.com/admin):
 1. **DNS** → turn on **MagicDNS** and **HTTPS Certificates**. The server's TLS
    comes from these. Certificates are public record, so the machine's tailnet
    name appears in Certificate Transparency logs.
-2. **Access controls** → edit [`config/tailscale-policy.hujson`](config/tailscale-policy.hujson),
-   replacing `YOUR-LOGIN` with your login from the Users page, and paste it in.
-   Pasting **replaces** your tailnet's whole policy. The policy lets the machine
-   carry the `tag:llm-server` tag, and makes the tailnet **default-deny**, so
-   you get in only on the ports the template lists. If other devices on your
-   tailnet need to reach each other, add grants for them.
+2. **Access controls** → paste in
+   [`config/tailscale-policy.hujson`](config/tailscale-policy.hujson).
+   Pasting **replaces** your tailnet's whole policy. The policy makes the
+   tailnet **default-deny**, with one grant: each member's devices reach that
+   member's other devices, the server included, on any port. Another member's
+   devices get nothing until a grant names them. To run the server as a tagged
+   device, reachable on named ports only, follow the comment at the end of the
+   file instead.
 3. **Settings → Device management** → turn on **Device approval**, so a leaked
    auth key is not enough to join.
 
@@ -175,9 +177,13 @@ uninstall-system-daemon` removes it. If the Mac ran Homebrew's
 drops for a few seconds. Run it at the Mac, or in a terminal session that
 survives a dropped connection, such as tmux. The first
 time, it prints a login URL. Open it, and approve the machine in the admin
-console. The script joins with the `tag:llm-server` tag, and tagged devices
-never have their keys expire. It also makes your account Tailscale's operator,
-so step 5 needs no sudo, and checks that HTTPS certificates are available.
+console. The machine joins as one of your devices, so its key expires like
+theirs, and the endpoint drops off the tailnet when it does: disable key expiry
+for it on the admin console's Machines page. The script warns until you have.
+With `LLM_TAG` set in `config.env`, it joins with that tag instead, and tagged
+devices never have their keys expire. It also makes your account Tailscale's
+operator, so step 5 needs no sudo, and checks that HTTPS certificates are
+available.
 
 ---
 
@@ -201,6 +207,13 @@ settings change.
 Your endpoint is `https://<machine>.<tailnet>.ts.net/v1`, and the model ID
 clients use is `mlx-community/Qwen3.8-27B-4bit`. The key is the one line of
 `~/.config/llm-server/api-key`.
+
+The endpoint takes the tailnet's HTTPS port 443 by default. To keep 443 for
+something else on the Mac, set `LLM_HTTPS_PORT` in `config.env`, such as
+`8443`, and re-run the script: it serves the endpoint on that port and stops
+serving it on the old one. Every URL in this guide and in `docs/clients.md`
+then carries the port, as in `https://<machine>.<tailnet>.ts.net:8443/v1`.
+Splash's `--allowed-host` check ignores the port (`docs/findings.md`).
 
 **How it runs.** Splash ships no service manager, so `3-services.sh` fills in
 `config/com.llmserver.splash.plist` and installs it as
@@ -343,9 +356,9 @@ FileVault and the hardening. It exits non-zero if anything fails.
 
 **On each device that will use it:**
 
-1. **Join the tailnet** with the Tailscale login your policy names (step 2).
+1. **Join the tailnet** with the same Tailscale login as the server (step 2).
    Another login, or a device shared in from another tailnet, gets nothing
-   until you add it to the policy.
+   until you add a grant for it to the policy.
 2. **Copy the key**, the one line of `~/.config/llm-server/api-key` on the
    server, through a password manager, or over SSH on the tailnet. Keep it
    where only you can read it, not in shell history or a repository.

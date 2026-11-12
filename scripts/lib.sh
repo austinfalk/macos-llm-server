@@ -24,7 +24,8 @@ if [ -f "$LLM_REPO/config.env" ]; then
 fi
 : "${LLM_USER:=${SUDO_USER:-$(id -un)}}"
 : "${LLM_MODEL:=mlx-community/Qwen3.8-27B-4bit}"
-: "${LLM_TAG:=tag:llm-server}"
+: "${LLM_TAG:=}"
+: "${LLM_HTTPS_PORT:=443}"
 : "${LLM_BATTERY_SHUTDOWN_PCT:=15}"
 : "${LLM_DISABLE_SLEEP:=no}"
 
@@ -105,7 +106,31 @@ endpoint_host() {
 }
 endpoint_url() {
 	_h=$(endpoint_host)
-	[ -n "$_h" ] && printf 'https://%s' "$_h"
+	[ -n "$_h" ] || return 1
+	if [ "$LLM_HTTPS_PORT" = 443 ]; then
+		printf 'https://%s' "$_h"
+	else
+		printf 'https://%s:%s' "$_h" "$LLM_HTTPS_PORT"
+	fi
+}
+# serve_block URL: the lines of `tailscale serve status` for URL, which heads
+# its own block, as `https://HOST` for port 443 and `https://HOST:PORT` for
+# any other port.
+serve_block() {
+	tailscale serve status 2>/dev/null | awk -v url="$1" '/^https?:\/\// { on = ($1 == url) } on'
+}
+# serve_urls_to TARGET: every URL whose root `tailscale serve` proxies to
+# TARGET, such as http://127.0.0.1:8000.
+serve_urls_to() {
+	tailscale serve status 2>/dev/null \
+		| awk -v t="$1" '/^https?:\/\// { url = $1 } $2 == "/" && $3 == "proxy" && $4 == t { print url }'
+}
+# url_port URL: the HTTPS port of a URL from serve_urls_to.
+url_port() {
+	case ${1##*:} in
+		*[!0-9]* | '') printf 443 ;;
+		*) printf '%s' "${1##*:}" ;;
+	esac
 }
 key() { head -1 "$KEY_FILE" 2>/dev/null; }
 

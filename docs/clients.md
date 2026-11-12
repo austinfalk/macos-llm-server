@@ -17,7 +17,9 @@ write it anywhere except the one file in step 2. Hand anything that needs
 needs it, ask the user.
 
 Throughout, `ENDPOINT` means `https://<machine>.<tailnet>.ts.net`, the server's
-address, which `tailscale status` lists once step 1 is done. The server runs
+address, which `tailscale status` lists once step 1 is done. If the server's
+owner set `LLM_HTTPS_PORT` (README, step 5), it carries that port, as in
+`https://<machine>.<tailnet>.ts.net:8443`. The server runs
 [Splash](https://github.com/incoai/splash), or on an M1 or M2 Mac its port
 [paperniuk/splash](https://github.com/paperniuk/splash), with Qwen3.8-27B and
 its DFlash2 draft. Every API is under `ENDPOINT/v1`: OpenAI chat completions
@@ -48,7 +50,7 @@ set one (the port's `install/clients.py`). Four facts shape every config:
 You need these from the server's owner:
 
 - The server set up and verified (the [README](../README.md), steps 1-7).
-- A Tailscale login that the server's tailnet policy names (README, step 2).
+- The server's Tailscale login, which the tailnet policy grants (README, step 2).
 - A way to read the API key, the one line of `~/.config/llm-server/api-key`
   on the server: a password manager with a command-line tool, or SSH to the
   server on the tailnet. Step 2 uses either.
