@@ -1,37 +1,53 @@
-// Tailnet access policy for an LLM server.
+// Tailnet access policy: each member's devices reach each other, the model
+// server included, and nothing else gets in.
 //
-// Paste into https://login.tailscale.com/admin/acls/file after replacing
-// YOUR-LOGIN below with your login as shown on the admin console's Users page
-// (for example alice@github or alice@example.com).
+// Paste into https://login.tailscale.com/admin/acls/file. Pasting replaces the
+// tailnet's whole policy.
 //
-// Apply it BEFORE running scripts/2-tailscale.sh: a machine can only advertise
-// tag:llm-server if the policy names who may apply that tag.
-//
-// Defining `grants` makes the tailnet default-deny. Anything not listed below
-// is refused. Keep that in mind if the tailnet has other devices that need to
-// reach each other, add grants for them too.
+// Defining `grants` makes the tailnet default-deny. This one grant lets every
+// device a member owns reach that member's other devices, on any port. Another
+// member's devices, and tagged devices, get nothing until a grant names them.
+// The server joins as one of your devices (scripts/2-tailscale.sh), so it needs
+// no grant of its own.
 
 {
-	"tagOwners": {
-		// Tagged devices have no owner, so the tag needs one. Tagged devices
-		// also have key expiry disabled, which is what you want for a server.
-		"tag:llm-server": ["autogroup:admin"],
-	},
-
 	"grants": [
 		{
-			"src": ["YOUR-LOGIN"],
-			"dst": ["tag:llm-server"],
-			// Ports belong in `ip`. Appending them to `dst` is the older ACL
-			// syntax and does not work in a grant.
-			"ip": [
-				"tcp:443", // the inference endpoint (tailscale serve)
-				"tcp:22",  // SSH, if Remote Login is on
-				"tcp:5900", // Screen Sharing, if on (README, step 6)
-			],
+			"src": ["autogroup:member"],
+			"dst": ["autogroup:self"],
+			"ip":  ["*"],
 		},
 	],
 }
+
+// To run the server as a tagged device instead, owned by no one and reachable
+// on named ports only: set LLM_TAG=tag:llm-server in config.env, apply the
+// policy BEFORE scripts/2-tailscale.sh (a machine can only advertise a tag the
+// policy names an owner for), and add to the policy above:
+//
+//	"tagOwners": {
+//		"tag:llm-server": ["autogroup:admin"],
+//	},
+//
+// and to "grants", with YOUR-LOGIN as shown on the admin console's Users page
+// (for example alice@github or alice@example.com), and LLM_HTTPS_PORT in place
+// of 443 if config.env changes it:
+//
+//	{
+//		"src": ["YOUR-LOGIN"],
+//		"dst": ["tag:llm-server"],
+//		// Ports belong in `ip`. Appending them to `dst` is the older ACL
+//		// syntax and does not work in a grant.
+//		"ip": [
+//			"tcp:443",  // the inference endpoint (tailscale serve)
+//			"tcp:22",   // SSH, if Remote Login is on
+//			"tcp:5900", // Screen Sharing, if on (README, step 6)
+//		],
+//	},
+//
+// Tagged devices never have their keys expire. A device you own does, unless
+// you disable key expiry for it in the admin console (scripts/2-tailscale.sh
+// reminds you).
 
 // Also, in the admin console (not expressible in this file):
 //   - DNS page: enable MagicDNS and HTTPS Certificates.

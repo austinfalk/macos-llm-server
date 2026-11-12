@@ -1,6 +1,7 @@
 #!/bin/sh
-# README step 4: run Tailscale as a system daemon and join the tailnet as a tagged
-# server. Apply config/tailscale-policy.hujson in the admin console first.
+# README step 4: run Tailscale as a system daemon and join the tailnet, as one
+# of your devices, or as a tagged server when LLM_TAG is set. Apply
+# config/tailscale-policy.hujson in the admin console first.
 #
 #     sudo sh scripts/2-tailscale.sh
 set -eu
@@ -64,19 +65,39 @@ if [ "$(backend)" != Running ]; then
 fi
 # --operator lets $LLM_USER run `tailscale serve` and friends without sudo.
 tailscale set --operator="$LLM_USER"
-tagged=no
-count=$(tailscale status --json | plutil -extract Self.Tags raw -o - - 2>/dev/null) || count=0
+status=$(tailscale status --json)
+tags=
+count=$(json_value "$status" Self.Tags)
 i=0
-while [ "$i" -lt "$count" ]; do
-	[ "$(tailscale status --json | plutil -extract "Self.Tags.$i" raw -o - -)" = "$LLM_TAG" ] && tagged=yes
+while [ "$i" -lt "${count:-0}" ]; do
+	tags="$tags $(json_value "$status" "Self.Tags.$i")"
 	i=$((i + 1))
 done
-if [ $tagged = yes ]; then
-	ok "joined as $(endpoint_host), tagged $LLM_TAG (tagged devices do not expire)"
-else
-	die "joined as $(endpoint_host) but NOT tagged $LLM_TAG, so the tailnet policy will not grant access to it.
+tags=${tags# }
+if [ -n "$LLM_TAG" ]; then
+	case " $tags " in
+		*" $LLM_TAG "*) ok "joined as $(endpoint_host), tagged $LLM_TAG (tagged devices do not expire)" ;;
+		*) die "joined as $(endpoint_host) but NOT tagged $LLM_TAG, so the tailnet policy will not grant access to it.
 Check the policy's tagOwners, then:
-    sudo tailscale up --advertise-tags=$LLM_TAG --operator=$LLM_USER --force-reauth"
+    sudo tailscale up --advertise-tags=$LLM_TAG --operator=$LLM_USER --force-reauth" ;;
+	esac
+elif [ -n "$tags" ]; then
+	# autogroup:self, which config/tailscale-policy.hujson grants, leaves out
+	# tagged devices.
+	die "joined as $(endpoint_host), tagged $tags, but LLM_TAG is empty, so this machine
+should be one of your own devices. Either set LLM_TAG in config.env to match
+the policy, or remove the tags by logging in again as yourself, at the Mac (the
+tailnet drops while it does):
+    sudo tailscale up --advertise-tags= --operator=$LLM_USER --force-reauth"
+else
+	expiry=$(json_value "$status" Self.KeyExpiry)
+	if [ -n "$expiry" ]; then
+		warn "joined as $(endpoint_host), your device, but its key expires $expiry, and the
+        endpoint drops off the tailnet then. Disable key expiry for this machine
+        on the admin console's Machines page, then re-run to check."
+	else
+		ok "joined as $(endpoint_host), your device, key expiry disabled"
+	fi
 fi
 
 step "HTTPS certificates"

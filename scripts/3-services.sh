@@ -17,6 +17,9 @@ check_user
 [ "$(id -un)" = "$LLM_USER" ] || die "run this as $LLM_USER (LLM_USER), who owns the server"
 
 step "Prerequisites"
+case $LLM_HTTPS_PORT in
+	'' | *[!0-9]*) die "LLM_HTTPS_PORT is '$LLM_HTTPS_PORT', not a port number: fix it in config.env" ;;
+esac
 [ -x "$SPLASH_BIN" ] || die "Splash is not installed: run scripts/1-install.sh"
 version=$("$SPLASH_BIN" --version 2>/dev/null) || version=
 [ "$version" = "Splash $SPLASH_VERSION" ] || die "$SPLASH_BIN is '$version', not Splash $SPLASH_VERSION: run scripts/1-install.sh"
@@ -78,12 +81,20 @@ ok "ready"
 
 step "Tailnet HTTPS"
 # As the Tailscale operator (scripts/2-tailscale.sh), no sudo needed.
-tailscale serve --bg "$LLM_PORT" >/dev/null
-if tailscale serve status 2>/dev/null | grep -q "127.0.0.1:$LLM_PORT"; then
+# Serve configures each HTTPS port separately, so after LLM_HTTPS_PORT changes,
+# the old port would keep serving the endpoint, and keep it from anything else.
+tailscale serve --bg --https="$LLM_HTTPS_PORT" "$LLM_PORT" >/dev/null
+if serve_block "$EP" | grep -q " proxy http://127.0.0.1:$LLM_PORT\$"; then
 	ok "tailscale serve: $EP -> 127.0.0.1:$LLM_PORT"
 else
 	die "tailscale serve did not take. See: tailscale serve status"
 fi
+for url in $(serve_urls_to "http://127.0.0.1:$LLM_PORT"); do
+	[ "$url" != "$EP" ] || continue
+	tailscale serve --https="$(url_port "$url")" off >/dev/null \
+		|| die "could not stop serving the endpoint at $url as well: run 'tailscale serve --https=$(url_port "$url") off'"
+	ok "no longer served at $url"
+done
 
 step "Checking"
 code=$(http_code "$EP/v1/models" "$(key)")

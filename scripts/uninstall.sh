@@ -14,13 +14,13 @@ need_root
 check_user
 
 step "Model server"
-if tailscale serve status 2>/dev/null | grep -q "127.0.0.1:$LLM_PORT"; then
-	if tailscale serve --https=443 off >/dev/null 2>&1; then
-		ok "tailscale serve off"
+for url in $(serve_urls_to "http://127.0.0.1:$LLM_PORT"); do
+	if tailscale serve --https="$(url_port "$url")" off >/dev/null 2>&1; then
+		ok "tailscale serve off for $url"
 	else
-		warn "could not stop tailscale serve: run 'tailscale serve --https=443 off'"
+		warn "could not stop tailscale serve: run 'tailscale serve --https=$(url_port "$url") off'"
 	fi
-fi
+done
 stop_job "gui/$LLM_UID/$SPLASH_LABEL"
 rm -f "$SPLASH_PLIST"
 ok "Splash server $SPLASH_LABEL removed"

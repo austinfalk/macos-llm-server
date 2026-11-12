@@ -24,12 +24,15 @@ KEY=$(key)
 
 step "Tailnet"
 if [ -n "$EP" ]; then pass "$EP"; else fail "Tailscale is not up"; fi
-serve=$(tailscale serve status 2>/dev/null)
-if printf '%s\n' "$serve" | grep -q "127.0.0.1:$LLM_PORT"; then
+serve=$(serve_block "$EP")
+if printf '%s\n' "$serve" | grep -q " proxy http://127.0.0.1:$LLM_PORT\$"; then
 	pass "tailscale serve -> 127.0.0.1:$LLM_PORT"
 else
-	fail "tailscale serve is not forwarding to 127.0.0.1:$LLM_PORT (re-run scripts/3-services.sh)"
+	fail "tailscale serve is not forwarding $EP to 127.0.0.1:$LLM_PORT (re-run scripts/3-services.sh)"
 fi
+for url in $(serve_urls_to "http://127.0.0.1:$LLM_PORT"); do
+	[ "$url" = "$EP" ] || fail "tailscale serve also forwards $url to the server (re-run scripts/3-services.sh)"
+done
 # Funnel would publish the endpoint to the whole internet.
 if printf '%s\n' "$serve" | grep -qi 'funnel on' || ! printf '%s\n' "$serve" | grep -q '(tailnet only)'; then
 	fail "tailscale serve is not tailnet-only: Funnel may be on. Turn it off, then re-run scripts/3-services.sh"
