@@ -7,8 +7,8 @@ MacBook Pro 16" (M1 Max, 10-core CPU, 32-core GPU, 64 GB).
 The findings come in two parts:
 
 1. Part 1, [the server](#the-server-splash-for-m1m2-and-qwen38-27b), is the
-   server as it runs now, Splash's M1/M2 port 1.5.0-m1 on its defaults, on
-   macOS 27.0.1. It covers the settings, startup, speed, idle release, clients,
+   server as it runs now, Splash's M1/M2 port 1.6.1-m1 on its defaults, on
+   macOS 27.2.1. It covers the settings, startup, speed, idle release, clients,
    known gaps and what is not measured.
 2. Part 2, [the Mac](#the-mac), covers heat, unattended operation, security,
    and whether local is worth it.
@@ -21,16 +21,16 @@ reproduced here. Everything else was.
 ## The server: Splash for M1/M2 and Qwen3.8-27B
 
 Since 2026-10-18 the server runs
-[paperniuk/splash](https://github.com/paperniuk/splash), since 2026-11-07
-release 1.5.0-m1 (2026-11-01), an unofficial port of [Splash](https://github.com/incoai/splash)
+[paperniuk/splash](https://github.com/paperniuk/splash), since 2026-11-14
+release 1.6.1-m1 (2026-11-12), an unofficial port of [Splash](https://github.com/incoai/splash)
 for M1 and M2. Splash, by Inco, needs an M3 or newer and refuses older GPUs.
 The port adds Metal kernels for Apple7 and Apple8 GPUs (M1, M2), bounded
 prefill commands so that macOS does not abort long prompts
 (`ImpactingInteractivity`), and Neural Engine prefill on M1 and M2
 *(sourced)*. Its author tested it on an M1 Max, not on an M2 *(sourced)*.
-1.5.0-m1 is Splash 1.5.0 with the port's kernels on top *(sourced)*.
-[Upgrade to 1.5.0-m1](#upgrade-to-150-m1) has what the upgrade changed here,
-and why the server skipped 1.6.0-m1.
+1.6.1-m1 is Splash 1.6.1 with the port's kernels on top *(sourced)*.
+[Upgrade to 1.6.1-m1](#upgrade-to-161-m1) has what the upgrade changed here,
+and whether it fixed the hang that kept the server off 1.6.0-m1.
 
 ### Settings
 
@@ -126,6 +126,39 @@ server idle, wired memory was about 33 GiB, and the engine's resident size
 7.4 GB. Later starts reuse the calibration. A restart was ready 22 s after
 loading began.
 
+### Upgrade to 1.6.1-m1
+
+On 2026-11-14 the server moved from 1.5.0-m1 to 1.6.1-m1 with
+`1-install.sh` and `3-services.sh`. The release fixes the port's issue #51,
+the hang that kept the server off 1.6.0-m1 *(sourced)*. Its cause was not the
+17-to-32-row prefill tail itself but the first compile of a fused GGUF decode
+kernel on the engine loop, which took minutes on M1 and M2 and outran the
+30 s watchdog *(sourced)*. 1.6.1-m1 compiles each kernel only for the formats
+it uses (port PR #55), and Splash 1.6.1 runs every class of prefill chunk in
+a warm-up before "Ready", so a request no longer compiles a pipeline
+*(sourced)*. Draft PR #52 was closed unmerged in favour of that. The port's
+notes measure the 27B MLX 4-bit on an M1 Max at 57.3 tok/s decoding one lane,
+up from 54.9 on 1.6.0-m1, and its cold 16.7K prefill at 205 tok/s *(sourced)*.
+The checkpoint, its draft and every setting stayed the same. The installer's
+SHA-256 matches the release notes, and it differs from 1.5.0-m1's only in its
+version.
+
+The endpoint was down for 104 s, from Splash stopping to "Ready". The build
+calibrated the Neural Engine again, in 74.3 s, and kept share 0.47. Weights
+loaded in 7.4 s. The new warm-up took 16 s over 11 steps. `3-services.sh`
+passed its checks (200 with the key, 401 without).
+
+**The hang is gone here.** The new build's shaders were not in the cache, the
+case in which 1.6.0-m1 failed every first request *(sourced)*. Then 38
+fresh chats whose prompt length past a multiple of 128 was 17 to 32 tokens,
+each of those 16 sizes at least once, with prompts of 20 to 32, 145 to 159
+and 275 to 287 tokens, all answered 200 with "OK" in 1.0 to 4.6 s. On
+1.6.0-m1, prompts of 17 and 25 tokens had failed. A three-turn chat whose
+first prompt was 26 tokens, and whose follow-ups reused its cached prefix,
+answered each turn correctly. The log has
+no "Engine failed", no "did not answer status", and no pipeline created while
+serving.
+
 ### Upgrade to 1.5.0-m1
 
 On 2026-11-07 the server moved from 1.4.0-m1 to 1.5.0-m1 with
@@ -153,7 +186,7 @@ time. Prompts of 17 and 25 tokens failed. An 11-token prompt passed. This is the
 request hangs when its last prefill chunk is 17 to 32 rows, and draft PR #52
 has a one-line fix *(sourced)*. The reporters there found 1.5.0-m1 unaffected
 *(sourced)*, and the same 17- and 25-token prompts passed on it here. The
-server stays on 1.5.0-m1 until a release includes the fix.
+server stayed on 1.5.0-m1 until 1.6.1-m1 fixed it.
 
 ### Upgrade to 1.4.0-m1
 
@@ -478,7 +511,7 @@ Found by 2026-10-03, except where an item says otherwise.
   [Six Colors](https://sixcolors.com/post/2026/05/filevault-keys-cant-be-escrowed-in-iCloud-anymore/)
   reports Settings and Passwords out of step with the Mac's key before, fixed
   by turning FileVault off and on in Settings *(sourced)*.
-- **Splash's `--allowed-host` ignores the port** (2026-11-11, 1.5.0-m1).
+- **Splash's `--allowed-host` ignores the port** (2026-11-11, 1.5.0-m1; again 2026-11-14, 1.6.1-m1).
   With `--allowed-host <machine>.<tailnet>.ts.net`, requests to
   `127.0.0.1:8000` with that `Host` header and no port, `:443`, or `:8443`
   all got 200, and another host got 403. So serving the endpoint on another

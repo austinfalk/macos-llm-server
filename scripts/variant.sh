@@ -13,18 +13,18 @@ variant_values() {
 		port)
 			# The installer keeps each version under SPLASH_HOME and points
 			# `current` and the splash-m1 command at the newest.
-			SPLASH_VERSION=1.5.0-m1
+			SPLASH_VERSION=1.6.1-m1
 			SPLASH_INSTALLER_URL=https://github.com/paperniuk/splash/releases/download/$SPLASH_VERSION/install-m1.sh
-			SPLASH_INSTALLER_SHA256=05393d888a0f626ec91d9ac42d85e03ae876265a54f97785327181927b8bc1e0
+			SPLASH_INSTALLER_SHA256=f3579df452ae7cd38bf7d1323c587ac0744aac422a915e20e5d1e28dea79a52a
 			SPLASH_HOME="$LLM_HOME/Library/Application Support/Splash-M1"
 			SPLASH_BIN=$BREW_PREFIX/bin/splash-m1
 			SPLASH_RUN_DIR=$SPLASH_HOME
 			;;
 		upstream)
-			SPLASH_VERSION=1.5.0
-			SPLASH_ARCHIVE_SHA256=1ddc28bf7bfda8833859a913d7072e2aac9072addb9eb5664f3bf1a83a8d6ee2
+			SPLASH_VERSION=1.6.1
+			SPLASH_ARCHIVE_SHA256=0ed408a781f951a13ff58bed95c9e8c1d1dc67ab9d649fcaf365972b6720ce6c
 			# The formula's only bottle, arm64_tahoe.
-			SPLASH_BOTTLE_SHA256=515ae0aa6fd3c1efa391903c3b669b5d8000557ac14293af82fb17c9521bfcd6
+			SPLASH_BOTTLE_SHA256=6a01f67e5a6c41c83f8fd08372cbd3ad6d3a40d660389bf98846378b86c8d3db
 			SPLASH_BIN=$BREW_PREFIX/bin/splash
 			SPLASH_RUN_DIR=$BREW_PREFIX/opt/splash/libexec
 			;;
