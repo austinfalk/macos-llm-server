@@ -157,7 +157,7 @@ and 275 to 287 tokens, all answered 200 with "OK" in 1.0 to 4.6 s. On
 first prompt was 26 tokens, and whose follow-ups reused its cached prefix,
 answered each turn correctly. The log has
 no "Engine failed", no "did not answer status", and no pipeline created while
-serving.
+serving. `sudo sh scripts/verify.sh` then passed with 0 failures.
 
 ### Upgrade to 1.5.0-m1
 
