@@ -50,7 +50,7 @@ Everything measured here ran on an M1 Max with 64 GB. The M3-and-later path
 follows Splash's own instructions but has not run on such a Mac here yet.
 
 **Expect it to be private, not fast.** On the M1 Max the default model reads a
-new prompt at about 150-200 tokens a second and writes 23-44, slower as a
+new prompt at about 160-235 tokens a second and writes 23-44, slower as a
 conversation grows. An agent's first turn takes one to two minutes, and
 follow-ups start in a second or two, because Splash caches the conversation.
 Base M1 and M2 chips have fewer GPU cores and will be slower (not measured).
@@ -345,7 +345,8 @@ Splash ships no service manager, so `3-services.sh` renders
 [`config/com.llmserver.splash.plist`](config/com.llmserver.splash.plist) into
 `~/Library/LaunchAgents`. launchd runs Splash in your login session, where
 macOS gives it the GPU and the Neural Engine. The LaunchAgent runs
-`splash serve` (or `splash-m1 serve`) with three flags and leaves everything
+`splash serve` (or `splash-m1 serve`) with three flags, two more on some M1
+and M2 chips, and leaves everything
 else at Splash's defaults:
 
 - `--model mlx-community/Qwen3.8-27B-4bit`: the model, and the ID clients use.
@@ -357,6 +358,13 @@ else at Splash's defaults:
   that name no effort get `medium` instead of the template's `xhigh`, which
   took far longer for a small gain and sometimes answered empty
   ([findings](docs/findings.md#reasoning-effort)).
+- `--ane-ffn-share 0.735 --ane-ffn-minimum-rows 512`, on an M1 Max with the
+  port's 1.6.1-m1.1 (0.88 on an M1 Pro, 0.53 on an M2 Max, none on other
+  chips): prompts of about 700 tokens or more read as a pair of chunks, the
+  Neural Engine on one while the GPU works on the other, about a fifth faster
+  on long prompts and a little slower on short ones. The values are the
+  port's ([findings](docs/findings.md#prefill-as-a-pair-of-chunks)). From
+  1.7.0-m1 the port times the pair itself, so the next bump drops them.
 
 Splash listens on 127.0.0.1:8000, its default, so `tailscale serve` is the only
 way in. The LaunchAgent's shell reads the key file into `SPLASH_API_KEY` and

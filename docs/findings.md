@@ -19,8 +19,8 @@ top. Its author tests on an M1 Max, and a contributor on an M2 Max
 
 ### Settings
 
-Everything is Splash's default except the LaunchAgent and three flags
-(README, "How it works"):
+Everything is Splash's default except the LaunchAgent and three flags, plus
+two on some M1 and M2 chips (README, "How it works"):
 
 - `--model mlx-community/Qwen3.8-27B-4bit`, the MLX checkpoint Splash's README
   lists. Splash pairs it with `incoai/Qwen3.8-27B-DFlash2` by itself. The
@@ -34,6 +34,8 @@ Everything is Splash's default except the LaunchAgent and three flags
   another name got 403 (1.5.0-m1 and 1.6.1-m1). So `LLM_HTTPS_PORT` needs no
   change to the flag.
 - `--default-reasoning-effort medium` ([Reasoning effort](#reasoning-effort)).
+- On 1.6.1-m1.1, `--ane-ffn-share 0.735 --ane-ffn-minimum-rows 512` on an M1
+  Max ([Prefill as a pair of chunks](#prefill-as-a-pair-of-chunks)).
 
 Defaults worth knowing: Splash listens on 127.0.0.1:8000, frees the weights
 after 10 idle minutes, admits 32 requests at once, running or waiting, and
@@ -72,6 +74,36 @@ renders `high` as `xhigh` (`REASONING_EFFORT_ALIASES` in
 Splash 1.7 adds `--reasoning-effort`, which forces one effort on every
 request, and refuses it together with `--default-reasoning-effort`
 *(sourced)*. Not adopted: clients that ask for `high` on purpose would lose it.
+
+### Prefill as a pair of chunks
+
+The port runs each prefill layer's FFN partly on the Neural Engine, at a
+share it calibrates on the first start of a build: 0.47 here. 1.6.1-m1.1 adds
+an opt-in mode: given a share by hand, it reads each prefill command of 512
+rows or more as two chunks, the Neural Engine on one chunk's FFN while the GPU
+runs the other's attention. Its notes say it pays only about 0.2 above the
+calibrated share, give 0.735 on an M1 Max, 0.88 on an M1 Pro and 0.53 on an
+M2 Max, and measured +18-19% cold prefill on the 27B at 2.1K to 16.7K tokens,
+-5% at 560, with logits as close to the GPU alone as the calibrated split
+(KL 0.00057 against 0.00050) *(sourced)*.
+
+Measured here on 2026-11-21: cold prompts of this repository's files with a
+fresh nonce, one output token, TTFT from Splash's log, the pair, then the
+calibrated split, then the pair again, a restart between each. Medians, tok/s:
+
+| Prompt | Pair (3 runs) | Calibrated (4 runs) | Pair again (4 runs) | Change |
+|---|---|---|---|---|
+| 820 tokens | 164 | 190 | 164 | -14% |
+| 2.9K | 213 | 194 | 212 | +10% |
+| 9.8-10K | 234 | 187 | 233 | +25% |
+
+A 10K-token prompt now starts in 43 s instead of 53. Prompts under about 700
+tokens are slower, but they take seconds either way, and cached follow-ups
+read only what is new. Decode is untouched: the pair applies to prefill only.
+**Changed:** `scripts/variant.sh` passes the port's share for M1 Max, M1 Pro
+and M2 Max with 1.6.1-m1.1, and none on other chips, which the notes do not
+name. 1.7.0-m1 times the pair on the first start (0.74 on an M1 Max for the
+27B, from 769 rows) *(sourced)*, so the next port bump drops the flags.
 
 ### Upgrades
 
@@ -271,7 +303,7 @@ working throughout. `pmset -g log` showed no sleep or wake events that day.
 ### Is local worth it
 
 Hosted providers serve the same model at about $0.10 / $1.80 per million
-input / output tokens and hundreds of tokens a second *(sourced)*. This M1 Max reads 150-200
+input / output tokens and hundreds of tokens a second *(sourced)*. This M1 Max reads 160-235
 and writes 23-44. Apple quotes an M5 Max at 6.7 times an M1 Max on prompt
 processing *(sourced)*. Local is for privacy, batch work and a private endpoint, not
 speed.

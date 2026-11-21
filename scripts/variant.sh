@@ -19,6 +19,17 @@ variant_values() {
 			SPLASH_HOME="$LLM_HOME/Library/Application Support/Splash-M1"
 			SPLASH_BIN=$BREW_PREFIX/bin/splash-m1
 			SPLASH_RUN_DIR=$SPLASH_HOME
+			# 1.6.1-m1.1 runs long prefills as a pair of chunks, Neural Engine
+			# beside GPU, only at a share set by hand. Its notes name one for
+			# these chips; from 1.7.0-m1 the port times the pair itself, so
+			# drop this at the next bump.
+			case ${CPU_BRAND-} in
+				"Apple M1 Max") _share=0.735 ;;
+				"Apple M1 Pro") _share=0.88 ;;
+				"Apple M2 Max") _share=0.53 ;;
+				*) _share= ;;
+			esac
+			SPLASH_SERVE_ARGS=${_share:+--ane-ffn-share $_share --ane-ffn-minimum-rows 512}
 			;;
 		upstream)
 			SPLASH_VERSION=1.7.0
@@ -27,9 +38,10 @@ variant_values() {
 			SPLASH_BOTTLE_SHA256=f86e7857146930174df0ccf72c1ac42e5c93eaa225f00715b10f40b678cf038c
 			SPLASH_BIN=$BREW_PREFIX/bin/splash
 			SPLASH_RUN_DIR=$BREW_PREFIX/opt/splash/libexec
+			SPLASH_SERVE_ARGS=
 			;;
 		*)
-			SPLASH_VERSION='' SPLASH_BIN='' SPLASH_RUN_DIR=''
+			SPLASH_VERSION='' SPLASH_BIN='' SPLASH_RUN_DIR='' SPLASH_SERVE_ARGS=''
 			;;
 	esac
 }

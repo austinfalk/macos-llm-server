@@ -218,6 +218,9 @@ render() {
 	_src=$LLM_REPO/config/$1
 	_tmp=$2.tmp.$$
 	[ -f "$_src" ] || die "missing template $_src"
+	# Each word of SPLASH_SERVE_ARGS becomes one ProgramArguments string.
+	_args=
+	for _a in ${SPLASH_SERVE_ARGS:-}; do _args="$_args<string>$_a</string>"; done
 	( umask 077
 	  sed -e "s|@LLM_BATTERY_SHUTDOWN_PCT@|$LLM_BATTERY_SHUTDOWN_PCT|g" \
 	      -e "s|@LLM_MODEL@|$LLM_MODEL|g" \
@@ -227,6 +230,7 @@ render() {
 	      -e "s|@SPLASH_VERSION@|$SPLASH_VERSION|g" \
 	      -e "s|@SPLASH_LABEL@|$SPLASH_LABEL|g" \
 	      -e "s|@SPLASH_LOG@|$SPLASH_LOG|g" \
+	      -e "s|@SPLASH_SERVE_ARGS@|$_args|g" \
 	      "$_src" > "$_tmp" ) || die "could not render $1"
 	if grep -q '@[A-Z_]*@' "$_tmp"; then
 		_left=$(grep -o '@[A-Z_]*@' "$_tmp" | head -1)

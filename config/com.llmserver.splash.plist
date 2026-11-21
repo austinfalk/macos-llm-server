@@ -22,6 +22,8 @@
 		<string>@ENDPOINT_HOST@</string>
 		<string>--default-reasoning-effort</string>
 		<string>medium</string>
+		<!-- Per-build flags from scripts/variant.sh, often none. -->
+		@SPLASH_SERVE_ARGS@
 	</array>
 	<key>RunAtLoad</key>
 	<true/>

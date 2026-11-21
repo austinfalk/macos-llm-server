@@ -43,7 +43,7 @@ kind() {
 }
 
 while read -r variant expected; do
-	unset SPLASH_VERSION SPLASH_BIN SPLASH_RUN_DIR SPLASH_HOME SPLASH_INSTALLER_URL \
+	unset SPLASH_VERSION SPLASH_BIN SPLASH_RUN_DIR SPLASH_SERVE_ARGS SPLASH_HOME SPLASH_INSTALLER_URL \
 		SPLASH_INSTALLER_SHA256 SPLASH_ARCHIVE_SHA256 SPLASH_BOTTLE_SHA256
 	variant_values "$variant"
 	for pair in $expected; do
@@ -54,6 +54,20 @@ port SPLASH_VERSION:set SPLASH_BIN:set SPLASH_RUN_DIR:set SPLASH_HOME:set SPLASH
 upstream SPLASH_VERSION:set SPLASH_BIN:set SPLASH_RUN_DIR:set SPLASH_ARCHIVE_SHA256:sha256 SPLASH_BOTTLE_SHA256:sha256
 none SPLASH_VERSION:empty SPLASH_BIN:empty SPLASH_RUN_DIR:empty
 VARIANTS
+
+# 1.6.1-m1.1's notes name a Neural Engine share for these chips only.
+while IFS='|' read -r variant brand want; do
+	CPU_BRAND=$brand
+	variant_values "$variant"
+	check "$variant on \"$brand\": serve args '$want'" "$SPLASH_SERVE_ARGS" "$want"
+done <<'ARGS'
+port|Apple M1 Max|--ane-ffn-share 0.735 --ane-ffn-minimum-rows 512
+port|Apple M1 Pro|--ane-ffn-share 0.88 --ane-ffn-minimum-rows 512
+port|Apple M2 Max|--ane-ffn-share 0.53 --ane-ffn-minimum-rows 512
+port|Apple M1|
+port|Apple M2 Ultra|
+upstream|Apple M3 Max|
+ARGS
 
 # A variant chosen by config.env or the environment could install a Splash that
 # refuses this Mac's GPU, so only lib.sh sets it, from the chip.
