@@ -1,504 +1,379 @@
 # macos-llm-server
 
-**A private AI server on a Mac.**
+**A private model server on an Apple Silicon Mac.**
 
-Turn an Apple Silicon Mac, desktop or laptop, into a model server that your
-other devices can use from anywhere, privately, with the model running on the
-Mac's GPU and Neural Engine. It runs [Splash](https://github.com/incoai/splash)
-on an M3 or later, and [its community port for M1 and
-M2](https://github.com/paperniuk/splash) on an M1 or M2. Splash serves OpenAI-
-and Anthropic-compatible APIs, so agents and other tools can point at it.
-
-The Mac needs macOS 26.4 or later, and the default model needs at least 36 GB
-of unified memory, 48 GB recommended *(sourced)*. Every measurement here is
-from an M1 Max. On an M3 or later, the scripts install Splash as its
-documentation describes, and that path has not yet run on an M3 or later here.
+These scripts turn a Mac with an M1 or later into a model server that your
+other devices reach over [Tailscale](https://tailscale.com), with an API key
+and nothing else exposed. The model runs on the Mac's GPU and Neural Engine
+with [Splash](https://github.com/incoai/splash), which serves OpenAI
+(chat completions, Responses) and Anthropic (Messages) APIs, so coding agents
+and scripts can use it.
 
 ```
-  your laptop, phone, CI ──Tailscale (WireGuard)──▶ tailscale serve :443    TLS, tailnet only
-                                                        │
-                                                        ▼
-                                                    Splash 127.0.0.1:8000   checks the API key,
-                                                                            runs the model on the GPU
+  laptop, phone, CI ──Tailscale──▶ tailscale serve :443 ──▶ Splash 127.0.0.1:8000
+                                   TLS, tailnet only        API key, model on the GPU
 ```
 
-When you are done:
+When you finish:
 
-- The model server runs **in your login session**, as a LaunchAgent this
-  repository installs, because Splash ships no service manager. After a
-  restart, you log in once, over Screen Sharing from anywhere on your tailnet,
-  and it starts.
-- The disk is encrypted with **FileVault**.
-- It is reachable **only over your tailnet**, and **only with an API key**.
-  Nothing listens on the local network.
-- One command, `scripts/verify.sh`, checks all of it.
+- Splash runs in your login session as a LaunchAgent and restarts if it fails.
+- The endpoint is reachable only from your tailnet, and only with the key.
+  Splash listens on loopback only, and Screen Sharing and SSH refuse the local
+  network.
+- The disk is encrypted with FileVault. After `sudo fdesetup authrestart` you
+  log in over Screen Sharing on the tailnet, and the server starts. After a
+  crash or power cut, someone types the password at the Mac.
+- `sudo sh scripts/verify.sh` checks all of it.
 
-This guide runs Splash on its defaults, apart from the LaunchAgent and the
-default reasoning effort (step 5), and defers to the published measurements of
-Splash and its M1/M2 port. What was measured on this guide's M1 Max is in
-[`docs/findings.md`](docs/findings.md).
+## Requirements
 
----
+| | |
+|---|---|
+| Mac | Apple Silicon, macOS 26.4 or later, an administrator account |
+| Memory | 48 GB or more for the default model. With less, pick a smaller one before step 5 ([Models](#models)) |
+| Disk | About 25 GB for the model and its draft, plus Splash's SSD cache, which it sizes itself up to 32 GiB |
+| Software | [Homebrew](https://brew.sh) in `/opt/homebrew`, its default on Apple Silicon, and a [Tailscale](https://tailscale.com) account |
+| Time | About an hour, most of it the first download |
 
-## Before you start
+The scripts pick the Splash build for the chip:
 
-**Hardware.** A Mac with Apple Silicon. Splash itself runs only on an M3 or
-later *(sourced)*, and `1-install.sh` installs it there. On an M1 or M2, the
-script installs [paperniuk/splash](https://github.com/paperniuk/splash), an
-unofficial community port that adds Metal kernels for M1 and M2 GPUs. Its
-author tested it on an M1 Max and not on an M2 *(sourced)*. Memory decides
-which models you can run. Splash sizes its memory and context at startup, and
-stops if the model does not fit. The model used here needs at least 36 GB of
-unified memory, 48 GB recommended *(sourced)*.
+| Chip | Build | Installed from |
+|---|---|---|
+| M3 or later | [Splash](https://github.com/incoai/splash), by Inco | Homebrew formula `incoai/tap/splash`, command `splash` |
+| M1 or M2 | [paperniuk/splash](https://github.com/paperniuk/splash), an unofficial community port, because Splash refuses GPUs older than the M3's | The port's release installer, command `splash-m1` |
 
-**Set expectations.** A local model is private, not fast. On an M1 Max, the
-model used here reads a new prompt at about 150-185 tokens a second and writes
-at about 23-38, slower as a conversation grows. An agent's first turn takes a
-minute or two. Follow-ups start in 1-2 s, because the server caches the
-conversation. Every speed and wait in this guide was measured on that M1 Max.
-Hosted models run far faster. Local suits code that cannot leave the building,
-batch and overnight jobs, and a private endpoint for your own scripts
-([findings](docs/findings.md#context-is-local-worth-it-sourced)).
+Each build is pinned by version and checksum in `scripts/variant.sh`, so
+`brew upgrade` never moves it. Pinned now: Splash **1.7.0** and the port
+**1.6.1-m1.1**. The port's 1.7.0-m1 was tried and rolled back because it wrote
+nonsense in short conversations ([findings](docs/findings.md#upgrades)).
+Everything measured here ran on an M1 Max with 64 GB. The M3-and-later path
+follows Splash's own instructions but has not run on such a Mac here yet.
 
-**You need** macOS 26.4 or later, an administrator account on the Mac,
-[Homebrew](https://brew.sh), a [Tailscale](https://tailscale.com) account,
-about an hour, and room for the model download, about 19 GB.
+**Expect it to be private, not fast.** On the M1 Max the default model reads a
+new prompt at about 150-200 tokens a second and writes 23-44, slower as a
+conversation grows. An agent's first turn takes one to two minutes, and
+follow-ups start in a second or two, because Splash caches the conversation.
+Base M1 and M2 chips have fewer GPU cores and will be slower (not measured).
+Newer chips read prompts much faster. Local suits code that must not leave the
+machine, batch and overnight work, and a private endpoint for your scripts.
 
-**Get this repository onto the Mac**, anywhere you like. Optionally copy
-`config.env.example` to `config.env` and change settings. Every setting has a
-working default, and the file explains each one.
+## Setup
 
----
+Run every command from the repository's folder on the Mac. Each script checks
+its own result and stops with the fix if something is wrong. Each one is safe
+to run again.
 
-## 1. Choose a model
+**If you are an agent:** run steps 1, 3 and 5 yourself. Hand steps 2, 4, 6 and
+7 to the user, with each command and what it should print: they need the
+Tailscale admin console, a browser login, System Settings or sudo. Step 5 can
+run for an hour on the first start, so run it in the background and follow
+`~/Library/Logs/llm-server/splash.log`. If it is interrupted, run it again: it
+waits for the server already starting.
 
-Splash serves two model families, Qwen3.8-27B and Qwen3.6-35B-A3B, in several
-quantizations: MLX checkpoints of 2 to 8 bits, Unsloth's GGUF variants of 1 to
-8 bits, NVFP4, and Prism ML's 2-bit Ternary Bonsai 2 (7.2 GB) *(sourced)*.
-Splash pairs each with the DFlash2 draft model trained for its family, which
-makes it write faster.
+### 1. Get the repository
 
-The default here is **Qwen3.8-27B** in MLX 4-bit,
-`mlx-community/Qwen3.8-27B-4bit`, which Splash's README lists and the port's
-release notes name. It scores 34 on the [Artificial Analysis Intelligence
-Index](https://artificialanalysis.ai/) v4.3.2, which changes over time, against
-18 for Qwen3.6-35B-A3B *(sourced)*. The 35B-A3B is a mixture of experts with 3B
-parameters active per token, so it writes faster, at a large cost in quality
-([findings](docs/findings.md#the-server-splash-for-m1m2-and-qwen38-27b)).
+`git clone` it anywhere and `cd` into it. To change a setting, copy
+`config.env.example` to `config.env` and edit it. Every setting is explained
+there. **On a Mac with less than 48 GB, do this now and set `LLM_MODEL` from
+[Models](#models)**: the default model does not fit, and step 5 downloads
+whatever `LLM_MODEL` names. Every other setting has a working default.
 
-To serve another, set `LLM_MODEL` in `config.env` to what Splash's `--model`
-takes: an MLX repository, such as `mlx-community/Qwen3.6-35B-A3B-4bit`, or a
-GGUF repository and variant, `OWNER/REPO:VARIANT`, such as
-`unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M`. [Splash's model
-list](https://github.com/incoai/splash#models) links the variants. Smaller ones
-fit Macs with less memory. None was measured here.
-
----
-
-## 2. Prepare the tailnet
+### 2. Prepare the tailnet
 
 In the [Tailscale admin console](https://login.tailscale.com/admin):
 
-1. **DNS** → turn on **MagicDNS** and **HTTPS Certificates**. The server's TLS
-   comes from these. Certificates are public record, so the machine's tailnet
-   name appears in Certificate Transparency logs.
-2. **Access controls** → paste in
-   [`config/tailscale-policy.hujson`](config/tailscale-policy.hujson).
-   Pasting **replaces** your tailnet's whole policy. The policy makes the
-   tailnet **default-deny**, with one grant: each member's devices reach that
-   member's other devices, the server included, on any port. Another member's
-   devices get nothing until a grant names them. To run the server as a tagged
-   device, reachable on named ports only, follow the comment at the end of the
-   file instead.
-3. **Settings → Device management** → turn on **Device approval**, so a leaked
-   auth key is not enough to join.
+1. **DNS**: turn on **MagicDNS** and **HTTPS Certificates**. Certificates are
+   public, so the machine's tailnet name appears in Certificate Transparency
+   logs.
+2. **Access controls**: if the tailnet has no policy of its own yet, paste in
+   [`config/tailscale-policy.hujson`](config/tailscale-policy.hujson), which
+   **replaces** the whole policy. If it has rules you need, add only that
+   file's grant to them. The grant lets each member's devices reach that
+   member's other devices, the server included, and nothing else. To run the
+   server as a tagged device instead, follow the comment at the end of the
+   file and set `LLM_TAG`.
+3. **Settings → Device management**: turn on **Device approval**.
 
----
-
-## 3. Install the software
-
-As your normal user:
+### 3. Install
 
 ```sh
 sh scripts/1-install.sh
 ```
 
-The script checks for Apple Silicon and macOS 26.4 or later, installs
-`tailscale` from Homebrew and the Splash build for this chip, and keeps the
-model cache out of Time Machine. If the Tailscale app is installed, the script
-warns you. This setup runs Homebrew's `tailscaled` instead, and running both
-has not been tested.
+As your normal user, not sudo. It checks the chip and macOS, installs
+`tailscale` from Homebrew and the pinned Splash build, and keeps the model cache
+out of Time Machine. It refuses a Splash whose version or checksum differs
+from the pins. On an M3 or later, Homebrew's tap offers only the newest
+Splash, so once Splash releases past the pin the script stops and says so.
+Then follow [Update Splash](#update-splash) to pin the new release, or wait for
+this repository to pin it.
 
-**Which Splash.** `scripts/lib.sh` reads the chip and picks the build, and
-`scripts/variant.sh` pins each build's version and checksums:
+If the Tailscale app is installed, the script warns you. This setup runs
+Homebrew's `tailscaled` instead, so quit and remove the app.
 
-- **M3 and later, Splash itself.** `1-install.sh` adds the Homebrew tap
-  `incoai/tap` and reads the formula's version and the checksums of its
-  tarball and bottle. It refuses the formula unless they are `SPLASH_VERSION`,
-  `SPLASH_ARCHIVE_SHA256` and `SPLASH_BOTTLE_SHA256`. It installs
-  `incoai/tap/splash` with Homebrew's auto-update off, so the tap cannot change
-  after the check, then runs `brew pin splash`.
-- **M1 and M2, the port.** `1-install.sh` downloads the port's release
-  installer, `install-m1.sh`, for `SPLASH_VERSION`, and runs it only if its
-  SHA-256 is `SPLASH_INSTALLER_SHA256`. The installer checks the release
-  archive's SHA-256, installs the `splash-m1` command (step 9 lists where
-  things go), and leaves an official `splash` alone.
-
-Either way, the script then checks that `splash --version` or
-`splash-m1 --version` prints the pinned version. Because of the pins,
-`brew upgrade` never changes Splash. A new release is a step you take (step 9).
-
-**Optional: a Hugging Face token.** Models download from Hugging Face, which
-rate-limits anonymous downloads. Create a **read** token (Settings → Access
-Tokens), keep it in your password manager, and put it where Hugging Face's
-tools look. This command copies it from 1Password without showing it:
+Optional: a Hugging Face **read** token in `~/.cache/huggingface/token` lifts
+the rate limit on anonymous downloads. Paste it after this command, then press
+Ctrl-D:
 
 ```sh
-( umask 077; mkdir -p ~/.cache/huggingface && op read "op://Private/<item>/<field>" > ~/.cache/huggingface/token )
+( umask 077; mkdir -p ~/.cache/huggingface && cat > ~/.cache/huggingface/token )
 ```
 
----
-
-## 4. Join the tailnet
+### 4. Join the tailnet
 
 ```sh
 sudo sh scripts/2-tailscale.sh
 ```
 
-The script runs Tailscale as a system daemon, so the tailnet is up at boot,
-before anyone logs in, and you can reach the login window remotely. It copies
-Homebrew's `tailscaled` to `/usr/local/bin`, where only root can change it,
-and runs it from there with a launchd job that restarts it if it exits.
-Homebrew's folders belong to your account, so a daemon root ran from there
-could be swapped by anything running as you. The job uses the label and paths
-of Tailscale's own installer, so `sudo /usr/local/bin/tailscaled
-uninstall-system-daemon` removes it. If the Mac ran Homebrew's
-`sudo brew services` daemon before, the script replaces it, and the tailnet
-drops for a few seconds. Run it at the Mac, or in a terminal session that
-survives a dropped connection, such as tmux. The first
-time, it prints a login URL. Open it, and approve the machine in the admin
-console. The machine joins as one of your devices, so its key expires like
-theirs, and the endpoint drops off the tailnet when it does: disable key expiry
-for it on the admin console's Machines page. The script warns until you have.
-With `LLM_TAG` set in `config.env`, it joins with that tag instead, and tagged
-devices never have their keys expire. It also makes your account Tailscale's
-operator, so step 5 needs no sudo, and checks that HTTPS certificates are
-available.
+It copies `tailscaled` to `/usr/local/bin`, where only root can change it, and
+runs it as a system daemon, so the tailnet is up at boot before anyone logs
+in. The first time, it prints a login URL. Open it, log in, then approve the
+machine on the admin console's **Machines** page. On the same page,
+**disable key expiry** for it, or the endpoint drops off the tailnet when the
+key expires. The script warns until you have. It also makes your account
+Tailscale's operator, so the next step needs no sudo.
 
----
+If the Mac ran Homebrew's `sudo brew services` tailscaled before, the script
+replaces it and the tailnet drops for a few seconds. The script finishes even
+if an SSH session drops with it.
 
-## 5. Start the server
-
-As yourself, not sudo:
+### 5. Start the server
 
 ```sh
 sh scripts/3-services.sh
 ```
 
-The script generates an API key, installs a LaunchAgent that runs Splash, waits
-for the model, and publishes it on your tailnet. Then it **checks the
-endpoint**. A request with the key must get 200, and one without must get 401.
-The first start downloads the model and its draft, about 19 GB, prepares the
-weights, and times this Mac's Neural Engine against its GPU. That can take half
-an hour, and the script waits up to an hour. Later starts take a minute or two.
-You can re-run the script at any time. It restarts the server only when its
-settings change.
+As yourself, not sudo. It generates the API key, installs the LaunchAgent,
+waits for the model, publishes it with `tailscale serve`, and checks that a
+request with the key gets 200 and one without gets 401. The first start
+downloads the model and its draft, about 19 GB, and times the Neural Engine
+against the GPU. That can take half an hour, and the script waits up to an
+hour. Later starts take a minute or two.
 
-Your endpoint is `https://<machine>.<tailnet>.ts.net/v1`, and the model ID
-clients use is `mlx-community/Qwen3.8-27B-4bit`. The key is the one line of
-`~/.config/llm-server/api-key`.
+It prints what clients need:
 
-The endpoint takes the tailnet's HTTPS port 443 by default. To keep 443 for
-something else on the Mac, set `LLM_HTTPS_PORT` in `config.env`, such as
-`8443`, and re-run the script: it serves the endpoint on that port and stops
-serving it on the old one. Every URL in this guide and in `docs/clients.md`
-then carries the port, as in `https://<machine>.<tailnet>.ts.net:8443/v1`.
-Splash's `--allowed-host` check ignores the port (`docs/findings.md`).
+- Endpoint: `https://<machine>.<tailnet>.ts.net/v1`, with `:PORT` after the
+  name if you set `LLM_HTTPS_PORT`
+- Model: `LLM_MODEL`, `mlx-community/Qwen3.8-27B-4bit` by default
+- Key: the one line of `~/.config/llm-server/api-key`
 
-**How it runs.** Splash ships no service manager, so `3-services.sh` fills in
-`config/com.llmserver.splash.plist` and installs it as
-`~/Library/LaunchAgents/com.llmserver.splash.plist`. launchd runs Splash in
-your login session, where macOS gives it the GPU and the Neural Engine. It
-starts Splash at login, stops it at logout, and starts it again if it fails.
-Splash's output goes to `~/Library/Logs/llm-server/splash.log`. The LaunchAgent
-runs `splash serve`, or `splash-m1 serve` on an M1 or M2, with three flags
-([findings](docs/findings.md#the-server-splash-for-m1m2-and-qwen38-27b) has
-the reasons):
+Save the key in your password manager now, so client devices can copy it
+without showing it ([client guide](docs/clients.md), step 2). To copy it over
+SSH instead, turn on Remote Login (System Settings → General → Sharing) and
+add your client's public key to `~/.ssh/authorized_keys` before step 6.
 
-- `--model mlx-community/Qwen3.8-27B-4bit` (`LLM_MODEL`) is the model, and the
-  ID clients use. Splash adds its draft, `incoai/Qwen3.8-27B-DFlash2`, without
-  a flag.
-- `--allowed-host <machine>.<tailnet>.ts.net` lets in the requests that
-  `tailscale serve` passes on. Splash answers 403 to any other Host name, a
-  guard against DNS rebinding. The script reads the name from Tailscale.
-- `--default-reasoning-effort medium` sets the effort to `medium`, not the
-  template's `xhigh`, for chat completions and Responses requests that name
-  none.
+### 6. Harden
 
-Everything else is Splash's default, including its port, 8000, which
-`tailscale serve` forwards to. At each start, Splash also follows the model's
-newest commit on Hugging Face. This setup does not pin one with `--revision`.
-
-**The key reaches Splash in its environment.** The LaunchAgent runs
-`/bin/sh -c`, which reads the key file into `SPLASH_API_KEY` and `exec`s
-Splash, so the key is never on a command line or in the plist.
-Splash reads it once, when it starts. It checks `Authorization: Bearer` or
-`x-api-key` on every route except `/health`, `/ready` and the chat page.
-`/health` says only `{"status":"ok"}`, and `/ready` answers 200 once the model
-is ready. The chat page loads without the key, sends nothing until you enter
-it, and does not keep it *(sourced)*.
-
-**Splash listens only on 127.0.0.1**, its default. `tailscale serve` is the
-only way in, and it adds TLS and limits access to your tailnet.
-
-**The key guards the network, not the machine.** Anything running on the Mac
-as you can read the key file.
-
----
-
-## 6. Harden the machine
-
-Turn on FileVault first, if it is not on already:
+Turn on FileVault if it is off:
 
 ```sh
 sudo fdesetup enable
 ```
 
-It asks for your password and prints a recovery key. Keep the key in your
-password manager, not on the Mac. If it prints none, the Mac kept the key from
-an earlier time FileVault was on, and you may not have it. Make a new one,
-which replaces the old, and check the copy you saved:
+Keep the recovery key it prints in your password manager. If it prints none,
+the Mac kept an older key you may not have. Make a new one and check your copy:
 
 ```sh
 sudo fdesetup changerecovery -personal
-sudo fdesetup validaterecovery
+sudo fdesetup validaterecovery     # asks for the key, prints true
 ```
 
-`validaterecovery` asks for the key and prints `true` if it is the Mac's. On
-macOS 26 and later, System Settings → Privacy & Security → FileVault can also
-show a recovery key, a copy kept in Passwords. A key changed with `fdesetup`
-does not update that copy, so check it the same way before relying on it
-([findings](docs/findings.md#security)). With FileVault on, anyone holding the Mac
-cannot read its disk, and macOS turns off automatic login. The cost is
-restarts. After a restart with `sudo fdesetup authrestart`, the Mac unlocks
-its disk once by itself and waits at the login window with the tailnet up, so
-you can log in over Screen Sharing
-([Twocanoes](https://twocanoes.com/knowledge-base/unlock-filevault-automatically/))
-*(sourced)*. After any other restart, such
-as a crash or a power cut, it waits for the password at the Mac itself, with
-no network. Whether a macOS update restarts through `authrestart` was not
-tested here.
-
-Then:
+Turn on Screen Sharing, which is how you log in after a restart: System
+Settings → General → Sharing → **Screen Sharing**, allow only your account,
+and turn off **VNC viewers may control screen with password**. Turn off any
+sharing service you do not use, and AirPlay Receiver (General → AirDrop &
+Handoff). If you are connected over Screen Sharing from the local network,
+reconnect over `<machine>.<tailnet>.ts.net` first: the pf rules drop
+local-network Screen Sharing as soon as they load. Then:
 
 ```sh
 sudo sh scripts/4-harden.sh
 ```
 
-- **FileVault.** The script warns you if it is off. `verify.sh` fails.
-- **SSH.** If Remote Login is on, SSH accepts keys only, and only from the
-  tailnet. Tailscale's access rules do not cover your local network, so without
-  this your SSH password is open to anything on the LAN. If your account has no
-  SSH key installed, the script stops before it changes SSH, rather than lock
-  you out. Add a key to `~/.ssh/authorized_keys` and re-run.
-- **Power.** Desktops never sleep. Laptops never sleep on mains power with the
-  lid open, and sleep as usual when you close the lid (below).
-- **Screen Sharing, tailnet only.** Screen Sharing (port 5900), and the
-  Kerberos port its sign-in can use (88), listen on every network. The script
-  installs pf rules, reloaded at every boot, that drop both unless the
-  connection comes from the tailnet ([findings](docs/findings.md#security)).
-  Screen Sharing is how you log in remotely after a restart, so turn it on:
-  System Settings → General → Sharing → **Screen Sharing**, **Allow access
-  for: Only these users** (your account), and **"VNC viewers may control
-  screen with password"** off, because that password is an old 8-character
-  scheme. Connect to `<machine>.<tailnet>.ts.net` from another Mac with
-  Screen Sharing, or with a VNC client that supports Apple's sign-in, such as
-  Remmina on Linux, and sign in with your macOS account.
+It limits Screen Sharing (5900) and Kerberos (88) to the tailnet with pf rules
+that load at boot, makes SSH accept keys only and only from the tailnet (it
+stops first if your account has no SSH key, so you are not locked out), and
+keeps the Mac from sleeping on mains power. It warns if FileVault is off.
 
-Turn off any other sharing service you do not use, in System Settings →
-General → Sharing. AirPlay Receiver, under General → AirDrop & Handoff, also
-listens on every network.
+**Laptops.** Closing the lid sleeps the Mac, and a sleeping Mac stops serving.
+To keep serving with the lid shut, set `LLM_DISABLE_SLEEP=yes` in `config.env`
+and re-run `4-harden.sh`. It applies `pmset -a disablesleep 1`, which is
+system-wide and includes battery, so it also installs a watchdog that shuts
+the Mac down cleanly at 15% battery (`LLM_BATTERY_SHUTDOWN_PCT`). This was
+tested on mains power only.
 
-**Laptops with the lid shut.** Closing the lid sleeps a laptop. A sleeping Mac
-should not wake for a request over the tailnet, because Tailscale's encrypted
-traffic is not something macOS's wake-for-network can answer for. That was
-not tested here. To keep it serving, set
-`LLM_DISABLE_SLEEP=yes` in `config.env` and re-run `4-harden.sh`, which then
-applies `pmset -a disablesleep 1`. That setting is undocumented and
-system-wide, battery included. So the script also installs a watchdog that
-**shuts the Mac down cleanly at 15% battery** (`LLM_BATTERY_SHUTDOWN_PCT`),
-instead of running flat. Back on `no`, the default, it sets `disablesleep` to
-`0` and removes the watchdog. On mains power, with the lid shut, this guide's
-Mac served requests for hours without sleeping
-([findings](docs/findings.md#unattended-operation)). On battery it has not
-been tested.
-
----
-
-## 7. Verify
-
-Logged in on the Mac:
+### 7. Verify
 
 ```sh
 sudo sh scripts/verify.sh
 ```
 
-The script checks the tailnet (and that Funnel is off), that Splash's
-LaunchAgent is loaded in your session, that Splash is the pinned version (on an
-M3 or later, also pinned in Homebrew) and runs as you, not as root, that
-nothing listens beyond loopback, the API key with both headers (and wrong,
-empty and missing keys), what `/health` reveals, the model ID clients see, and
-FileVault and the hardening. It exits non-zero if anything fails.
+Run it while logged in on the Mac, because the server runs in your login
+session. It checks the tailnet (and that Funnel is off), the LaunchAgent, the
+pinned Splash version, that Splash runs as you and not root, that Splash's
+port listens on loopback only, the key (right, wrong, empty, missing,
+both headers), what `/health` reveals, the model ID, that a two-turn question
+gets the right answer, FileVault, pf and SSH. It exits non-zero on any
+failure.
 
----
+### 8. Connect clients
 
-## 8. Connect your tools
+Follow [`docs/clients.md`](docs/clients.md) on each client device. Steps 1-2
+join the tailnet and copy the key, and the rest configure Claude Code, Codex,
+Hermes Agent or OpenCode. Any other OpenAI-compatible tool works with the
+endpoint, the model ID and the key. Splash's own launchers (`splash claude`
+and the others) reach only a server on the same Mac.
 
-**On each device that will use it:**
+## Models
 
-1. **Join the tailnet** with the same Tailscale login as the server (step 2).
-   Another login, or a device shared in from another tailnet, gets nothing
-   until you add a grant for it to the policy.
-2. **Copy the key**, the one line of `~/.config/llm-server/api-key` on the
-   server, through a password manager, or over SSH on the tailnet. Keep it
-   where only you can read it, not in shell history or a repository.
-3. **Check it.** With the key saved, alone, in a file only you can read (here
-   `~/.config/llm-server/api-key`), this command passes it to curl on stdin,
-   not on its command line or in your shell history:
+Splash serves a few model families, Qwen3.8-27B and Qwen3.6-35B-A3B among
+them, as MLX checkpoints and Unsloth GGUFs, and pairs each with its DFlash2
+draft by itself ([Splash's model list](https://github.com/incoai/splash#models)).
+Set `LLM_MODEL` in `config.env` to what `--model` takes.
 
-   ```sh
-   printf 'header = "Authorization: Bearer %s"\n' "$(cat ~/.config/llm-server/api-key)" \
-     | curl -sf -K - https://<machine>.<tailnet>.ts.net/v1/models
-   ```
+| Mac memory | Model | Notes |
+|---|---|---|
+| 48 GB or more | `mlx-community/Qwen3.8-27B-4bit` (default) | Scores 34 on the Artificial Analysis Intelligence Index v4.3.2. Run here on 64 GB |
+| 48 GB or more, for speed | `mlx-community/Qwen3.6-35B-A3B-4bit` | 3B parameters active per token, so the port writes about twice as fast, but it scores 18 *(sourced)* |
+| 36-47 GB | The default may fit | Splash's README gave 36 GB as the 4-bit models' minimum and 48 GB as recommended, up to 1.4.0 *(sourced)*. Not run here |
+| 24-32 GB | `unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q2_K_XL` | Splash measured it on a 24 GB Mac with the full 256K context *(sourced)*. The port has not published a 24 GB measurement. Not run here |
+| Under 24 GB | None | Not covered by Splash or this guide |
 
-   `"id": "mlx-community/Qwen3.8-27B-4bit"` means the tailnet, TLS, the key and
-   Splash all work.
+Splash sizes memory and context at start and stops with a message if the
+model does not fit. A 27B GGUF small enough for 24 GB gets about 53K tokens of
+context there, too little for coding agents *(sourced)*. The model is also the
+model ID every client sends, so changing it means changing every client.
 
-Clients need the base URL `https://<machine>.<tailnet>.ts.net/v1` (Anthropic
-clients take it without `/v1`), the model `mlx-community/Qwen3.8-27B-4bit`, and
-the key. Splash applies Qwen's sampling settings when a client sends none. The
-model thinks before it answers, and the output limit counts the thinking, so a
-reply that runs out while thinking comes back empty. The client guide's configs
-allow 32,768 output tokens. **Tell clients the context window**, 262,144 tokens
-here, or less, so they compact before reaching it. `/v1/models` reports it as
-`context_length`.
-
-**Which tools work.** Claude Code (Anthropic Messages), Codex (Responses), and
-Hermes Agent and OpenCode (chat completions) all worked from another machine on
-2026-10-18, with Splash 1.3.2-m1.1 and an earlier version of the client guide's
-settings ([findings](docs/findings.md#the-server-splash-for-m1m2-and-qwen38-27b)).
-Under Claude Code's large prompt, the model once explored the Mac with tool
-calls instead of following a trivial instruction, until it was stopped.
-Splash's own launchers, `splash claude`, `codex`, `opencode`, `hermes` and
-`pi`, connect only to a server on the same Mac, and so do the port's
-`splash-m1` ones. From another machine, configure each tool by hand.
-[docs/clients.md](docs/clients.md) has step-by-step configurations for all
-four, with checks.
-
----
-
-## 9. Running it
+## Running it
 
 | | |
 |---|---|
+| Status | `curl -s -o /dev/null -w '%{http_code}\n' 127.0.0.1:8000/ready` prints 200 when the model is ready |
 | Restart | `launchctl kickstart -k gui/$(id -u)/com.llmserver.splash` |
-| Stop | `launchctl bootout gui/$(id -u)/com.llmserver.splash`. It starts again at your next login, or when you re-run `3-services.sh` |
-| Status | `curl -s -o /dev/null -w '%{http_code}\n' 127.0.0.1:8000/ready` prints 200 once the model is ready. `grep -E 'Ready\|Done' ~/Library/Logs/llm-server/splash.log \| tail` shows when it became ready and the last requests |
-| Job | `~/Library/LaunchAgents/com.llmserver.splash.plist`, rendered from `config/com.llmserver.splash.plist`. Change it by re-running `3-services.sh` |
-| Log | `~/Library/Logs/llm-server/splash.log`, Splash's output, which nothing rotates |
+| Stop | `launchctl bootout gui/$(id -u)/com.llmserver.splash`. It starts again at your next login or `3-services.sh` |
+| Log | `~/Library/Logs/llm-server/splash.log`. Nothing rotates it |
+| LaunchAgent | `~/Library/LaunchAgents/com.llmserver.splash.plist`, from `config/com.llmserver.splash.plist`. Change it by re-running `3-services.sh` |
 | API key | `~/.config/llm-server/api-key` |
-| Splash | On an M3 or later, Homebrew's `$(brew --prefix)/opt/splash`, and the command `$(brew --prefix)/bin/splash`. On an M1 or M2, `~/Library/Application Support/Splash-M1/<version>`, with `current` pointing at the newest, and the command `$(brew --prefix)/bin/splash-m1` |
-| Splash's data | `~/Library/Application Support/Splash`: `models/` (links into the Hugging Face cache), `runtime/`, and `thinking.key` |
-| Models | `~/.cache/huggingface/hub`: the model, 15 GB, and its draft, 3.6 GB |
-| Prompt cache | Temporary files in `$TMPDIR`, up to 32 GiB, freed when Splash exits |
-| Crash traces | `~/Library/Logs/Splash/crash`, only with `SPLASH_CRASH_TRACE=1` |
-| Chat page | `https://<machine>.<tailnet>.ts.net/`, with the key |
+| Splash | M3+: `$(brew --prefix)/opt/splash`. M1/M2: `~/Library/Application Support/Splash-M1/<version>`, with `current` linking the version installed last |
+| Splash's data | `~/Library/Application Support/Splash` |
+| Models | `~/.cache/huggingface/hub` |
+| Chat page | The endpoint without `/v1`, such as `https://<machine>.<tailnet>.ts.net/`. It asks for the key |
 
-**After a restart**, connect with Screen Sharing and log in. The server starts
-with your session, and the status command above prints 200 a minute or two
-later. After an unplanned restart, unlock FileVault at the Mac first. To
-restart it remotely, use `sudo fdesetup authrestart`, which unlocks the next
-boot once.
+**After a restart**, log in over Screen Sharing. The server starts with your
+session and is ready a minute or two later. For a planned restart, use
+`sudo fdesetup authrestart`, which unlocks FileVault once, so the Mac reaches
+the login window with the tailnet up. After a crash or power cut, FileVault
+waits for the password at the Mac itself.
 
-**Update Splash.** A new release means new pins in `scripts/variant.sh`. Read
-its notes first, especially for client support (step 8).
+### Update Splash
 
-On an M3 or later, watch [Splash's
-releases](https://github.com/incoai/splash/releases). They list the checksums
-of the tarball and the bottle in `SHA256SUMS`:
+Read the release notes first, especially anything about clients or flags the
+LaunchAgent passes. Then change the build's block in `scripts/variant.sh`.
+
+**M3 or later**, from [Splash's releases](https://github.com/incoai/splash/releases):
 
 ```sh
 curl -fsSL https://github.com/incoai/splash/releases/download/<version>/SHA256SUMS
 ```
 
-In the `upstream` block, set `SPLASH_VERSION` to the release's tag,
-`SPLASH_ARCHIVE_SHA256` to the `.tar.gz` line's checksum, and
-`SPLASH_BOTTLE_SHA256` to the `.bottle.tar.gz` line's. Then run:
+Set `SPLASH_VERSION` to the tag, `SPLASH_ARCHIVE_SHA256` to the checksum on
+the `splash-<version>-arm64-macos26.tar.gz` line, and `SPLASH_BOTTLE_SHA256` to
+the one on the `.bottle.tar.gz` line. With several bottles, list each checksum,
+space-separated, in the order `brew info --json=v2 incoai/tap/splash` lists
+them.
+Then:
 
 ```sh
-brew update
-brew unpin splash
-sh scripts/1-install.sh
+brew update && brew unpin splash
+sh scripts/1-install.sh       # refuses unless the formula matches, then pins again
 sh scripts/3-services.sh
 ```
 
-`brew update` fetches the tap's new formula, and `brew unpin` lets Homebrew
-upgrade Splash. `1-install.sh` refuses the formula unless it matches the pins,
-then upgrades Splash and pins it again. If it refuses, it installs nothing, so
-run `brew pin splash` and try again once the tap matches the release.
+If `1-install.sh` refuses, the tap has not caught up. Run `brew pin splash`
+and try again later.
 
-On an M1 or M2, watch [the port's
-releases](https://github.com/paperniuk/splash/releases). To move to one,
-download its `install-m1.sh`, read it, and take its SHA-256:
+**M1 or M2**, from [the port's releases](https://github.com/paperniuk/splash/releases):
 
 ```sh
-curl -fsSLO https://github.com/paperniuk/splash/releases/download/<version>/install-m1.sh
-shasum -a 256 install-m1.sh
+cd "$(mktemp -d)" && curl -fsSLO https://github.com/paperniuk/splash/releases/download/<version>/install-m1.sh
+shasum -a 256 install-m1.sh   # must match the release notes. Read the script
 ```
 
-In the `port` block, set `SPLASH_VERSION` to the release's tag and
-`SPLASH_INSTALLER_SHA256` to that SHA-256. Then run `sh scripts/1-install.sh`
-and `sh scripts/3-services.sh`. `1-install.sh` installs the release beside the
-old one and points `splash-m1` at it. Older versions stay under
-`~/Library/Application Support/Splash-M1` until you delete them.
+Set `SPLASH_VERSION` to the tag and `SPLASH_INSTALLER_SHA256` to that
+checksum. Then, back in the repository:
 
-On either build, the LaunchAgent names the version in a comment, so with a new
-pin `3-services.sh` restarts the server onto it, waits for the model, and
-checks the endpoint. Clients need no change.
+```sh
+sh scripts/1-install.sh       # installs beside the old version
+sh scripts/3-services.sh
+```
 
-**Update Tailscale** with Homebrew, `brew upgrade tailscale` or a routine
-`brew upgrade`, then re-run `sudo sh scripts/2-tailscale.sh`. It copies the new
-daemon into place and restarts it, which drops the tailnet for a few seconds.
-`verify.sh` fails while the old daemon still runs.
+Old versions stay in `~/Library/Application Support/Splash-M1` until you
+delete them.
 
-**Change the model.** Set `LLM_MODEL` in `config.env` and re-run
-`3-services.sh`. It rewrites the LaunchAgent and restarts the server, which
-downloads the new model and its draft at its first start. Clients must ask for
-the new model's ID, and check the context window `/v1/models` reports.
+On either build, `3-services.sh` sees the new version in the LaunchAgent,
+restarts the server onto it, waits for the model and checks the endpoint. A
+new release recalibrates once, so the endpoint is down a few minutes.
+Clients need no change.
 
-**Rotate the key.** Delete `~/.config/llm-server/api-key` and re-run
-`3-services.sh`. It makes a new key and restarts the server, because Splash
-reads the key only when it starts. The endpoint is down until the model is
-back, a minute or two. Then update your clients. If you change the file
-instead of deleting it, restart the server yourself (the table above).
+Then run `sudo sh scripts/verify.sh`. Besides the status codes, it asks a
+two-turn question and fails unless the answer is right. The status codes alone
+passed on 1.7.0-m1, which wrote nonsense. If it fails on an M1 or M2, put the previous
+values back in `scripts/variant.sh` and run the two scripts again: the old
+version is still installed. On an M3 or later the tap offers only its newest
+formula, so there is no scripted way back. Stop the server and wait for a
+fixed release. Record the result in `docs/findings.md`.
 
-**Remove it.** `sudo sh scripts/uninstall.sh` turns off `tailscale serve` and
-removes Splash's LaunchAgent, the hardening jobs, the pf rules and the SSH
-hardening, so SSH accepts passwords again, the macOS default. It prints what it
-leaves in place on purpose: the models, the key, the logs, Splash and its data
-folder, Tailscale and the tailnet membership, the power settings, and
-FileVault.
+### Other changes
 
----
+- **Tailscale:** `brew upgrade tailscale`, then `sudo sh scripts/2-tailscale.sh`,
+  which copies the new daemon into place. The tailnet drops for a few seconds.
+- **Model:** set `LLM_MODEL` in `config.env`, re-run `3-services.sh`, and give
+  clients the new model ID and context window.
+- **HTTPS port:** set `LLM_HTTPS_PORT` (such as `8443`) and re-run
+  `3-services.sh`. It moves the endpoint off the old port. Client URLs then
+  carry the port.
+- **Rotate the key:** delete `~/.config/llm-server/api-key`, re-run
+  `3-services.sh`, then update clients. Splash reads the key only at start.
+- **Remove it:** `sudo sh scripts/uninstall.sh` removes the LaunchAgent,
+  `tailscale serve`, the hardening jobs, pf rules and SSH settings. It lists
+  what it leaves on purpose: models, key, logs, Splash, Tailscale, power
+  settings and FileVault.
+
+## How it works
+
+Splash ships no service manager, so `3-services.sh` renders
+[`config/com.llmserver.splash.plist`](config/com.llmserver.splash.plist) into
+`~/Library/LaunchAgents`. launchd runs Splash in your login session, where
+macOS gives it the GPU and the Neural Engine. The LaunchAgent runs
+`splash serve` (or `splash-m1 serve`) with three flags and leaves everything
+else at Splash's defaults:
+
+- `--model mlx-community/Qwen3.8-27B-4bit`: the model, and the ID clients use.
+  Splash adds its draft, `incoai/Qwen3.8-27B-DFlash2`, by itself.
+- `--allowed-host <machine>.<tailnet>.ts.net`: Splash answers 403 to unknown
+  Host names, a guard against DNS rebinding, so it must know the name
+  `tailscale serve` passes on. The script reads it from Tailscale.
+- `--default-reasoning-effort medium`: chat completions and Responses requests
+  that name no effort get `medium` instead of the template's `xhigh`, which
+  took far longer for a small gain and sometimes answered empty
+  ([findings](docs/findings.md#reasoning-effort)).
+
+Splash listens on 127.0.0.1:8000, its default, so `tailscale serve` is the only
+way in. The LaunchAgent's shell reads the key file into `SPLASH_API_KEY` and
+then starts Splash, so the key is never on a command line or in the plist.
+Splash checks `Authorization: Bearer` or `x-api-key` on every route except
+`/health` (which says only `{"status":"ok"}`), `/ready` and the chat page,
+which sends nothing until you enter the key. The key protects the network
+side: anything running on the Mac as you can read it.
 
 ## Troubleshooting
 
-| Symptom | Likely cause | Fix |
+| Symptom | Cause | Fix |
 |---|---|---|
-| `401` | Missing or wrong key | Check the header. The key is the line in `~/.config/llm-server/api-key`. Splash reads it only when it starts, so after changing the file, restart the server (step 9) |
-| `403` "Host NAME is not allowed; restart the server with --allowed-host NAME" | The request names the server by a name it was not started with. A client uses another name, or the machine's tailnet name changed | Use `https://<machine>.<tailnet>.ts.net` in clients. After a rename, re-run `3-services.sh` |
-| `502` from the endpoint | Splash is not running, usually because nobody has logged in since a restart | Log in over Screen Sharing, then check its status (step 9) |
-| `503` `engine_recovering` | Splash's engine failed and is restarting. The message names the failure | Retry. If it fails three times soon after starting, Splash stops restarting it and answers `500` `engine_failed`. Restart the server (step 9) and read the log |
-| Empty answers | The model spent the client's whole output limit thinking | Raise the client's output limit. The configs in [docs/clients.md](docs/clients.md) allow 32,768 tokens |
-| `3-services.sh`: "something else listens on port 8000" | Another server uses the port | Stop the process the message names, then re-run `3-services.sh` |
-| `Bootstrap failed: 5: Input/output error` | A launchd job was restarted too quickly | Re-run the script. It waits and retries |
+| `401` | Missing or wrong key | Use the line in `~/.config/llm-server/api-key`. After changing the file, restart the server |
+| `403` "Host NAME is not allowed" | The client uses another name, or the machine was renamed | Use `https://<machine>.<tailnet>.ts.net`. After a rename, re-run `3-services.sh` |
+| `502` | Splash is not running, usually because nobody logged in since a restart | Log in over Screen Sharing, then check the status |
+| `503` `engine_recovering` | The engine failed and is restarting | Retry. After repeated failures Splash answers `500` `engine_failed`: restart the server and read the log |
+| Empty answers | The model used the client's whole output limit thinking | Raise the client's output limit to 32,768 |
+| "something else listens on port 8000" | Another server has the port | Stop the process the message names, then re-run `3-services.sh` |
+| `Bootstrap failed: 5: Input/output error` | A launchd job restarted too quickly | Re-run the script, which waits and retries |

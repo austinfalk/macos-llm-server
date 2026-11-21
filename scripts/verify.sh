@@ -112,6 +112,12 @@ expect "metrics without a key" "$(http_code "$EP/metrics")" 401
 expect "health without a key" "$(curl -s -m 10 "$EP/health")" '{"status":"ok"}'
 expect "model ID clients see" \
 	"$(curl_hdr "Authorization: Bearer $KEY" -s -m 20 "$EP/v1/models" | plutil -extract data.0.id raw -o - - 2>/dev/null)" "$LLM_MODEL"
+# A build can answer 200 and still write nonsense: 1.7.0-m1 failed this
+# follow-up every time (docs/findings.md).
+answer=$(curl_hdr "Authorization: Bearer $KEY" -s -m 120 -H 'Content-Type: application/json' \
+	-d "{\"model\":\"$LLM_MODEL\",\"max_tokens\":2048,\"messages\":[{\"role\":\"user\",\"content\":\"What is 2+2?\"},{\"role\":\"assistant\",\"content\":\"4\"},{\"role\":\"user\",\"content\":\"And 3+3? Digits only.\"}]}" \
+	"$EP/v1/chat/completions" | plutil -extract choices.0.message.content raw -o - - 2>/dev/null)
+expect "a follow-up's answer" "$(printf '%s' "$answer" | tr -d '[:space:].')" 6
 
 step "Machine"
 if fdesetup status 2>/dev/null | grep -q 'is On'; then
