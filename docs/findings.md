@@ -273,6 +273,7 @@ are compared. What happens under longer sustained load is not measured.
 - Port issue #51, the 1.6.0-m1 hang: https://github.com/paperniuk/splash/issues/51
 - incoai/splash #292, `--idle-release off`: https://github.com/incoai/splash/issues/292
 - Splash on 24 GB Macs: https://github.com/incoai/splash/blob/1.7.0/docs/performance.md#smaller-ggufs-on-24-gb-macs
+- The port's models by Mac memory: https://github.com/paperniuk/splash#which-model-for-your-mac
 - Artificial Analysis Intelligence Index: https://artificialanalysis.ai/
 - Hosted providers: https://openrouter.ai/qwen/qwen3.8-27b
 - Apple M5 Max: https://www.apple.com/newsroom/2026/08/apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra/
