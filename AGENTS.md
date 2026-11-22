@@ -38,8 +38,9 @@ and wait for a release.
   (Splash's LaunchAgent) and the hardening step (pf, sshd, battery watchdog)
   install, with `@PLACEHOLDERS@` filled by `render()` in `lib.sh`. `config.env`
   (gitignored) overrides the defaults in `lib.sh`.
-- `docs/` holds `findings.md`, the measurements, and `clients.md`, the guide
-  for connecting a client device.
+- `docs/` holds `findings.md`, the measurements of the server's speed,
+  settings and upgrades, and `clients.md`, the guide for connecting a client
+  device.
 
 ## Conventions
 
@@ -79,7 +80,8 @@ and wait for a release.
 - Never print the API key or put it on a command line: pass it to curl on stdin
   (`curl_hdr` in `lib.sh`), and to Splash in `SPLASH_API_KEY`, which the
   LaunchAgent's shell reads from the key file at start.
-- Record results in `docs/findings.md` with what they changed.
+- Record measurements of the server's speed, settings and upgrades in
+  `docs/findings.md`, with what they changed.
 - Every file describes the current setup. Engines and tools the server no
   longer uses stay in git history, not in the docs.
 - The repository is public, so nothing personal enters any file, commit

@@ -2,8 +2,7 @@
 
 How to use the server from another Linux or macOS machine with OpenCode.
 Follow the steps in order, running each check before the next. Last followed
-on a Linux client on 2026-11-21 with OpenCode 2.3.2, and on the server the
-same day ([findings](findings.md#clients)).
+on 2026-11-21 with OpenCode 2.3.2, on a Linux client and on the server.
 
 **If you are an agent following this:** do one step at a time and run its
 check. If a check fails, or a command, flag or config key does not exist in
@@ -168,11 +167,11 @@ Install OpenCode 2 from [its docs](https://opencode.ai/docs).
 }
 ```
 
-Keep any other keys already in the file. If it has OpenCode 1 keys
-(`provider`, `agent`, `permission` or `small_model`), move what you keep into
-`providers`, `agents` and `permissions` as the
-[migration guide](https://opencode.ai/docs/migrate-v1) describes, and delete
-the old keys. `opencode debug config` shows how OpenCode read the file.
+Keep any other keys already in the file.
+`opencode debug config --standalone` shows how OpenCode read it.
+
+If a package manager installed OpenCode (Homebrew, mise), add
+`"update": "disable"`, so OpenCode leaves updates to it.
 
 On the server itself, use the provider ID `local` instead of `tailnet`,
 everywhere it appears, and set `baseURL` to `http://127.0.0.1:8000/v1`. Keep
@@ -208,12 +207,15 @@ Why:
 **Check:**
 
 ```sh
-opencode run "Reply with the single word OK."
-opencode run -c "Now reply with the single word YES."
-opencode models | grep '^tailnet/'    # tailnet/mlx-community/Qwen3.8-27B-4bit
+opencode run --standalone "Reply with the single word OK."
+opencode run --standalone -c "Now reply with the single word YES."
+opencode models --standalone | grep '^tailnet/'    # tailnet/mlx-community/Qwen3.8-27B-4bit
 ```
 
-`opencode run` exits 0 even after an error, so read its output.
+Without `--standalone`, these commands use a background `opencode serve`,
+starting one if none is running. A server keeps the config it read when it
+started, so after an edit it answers with the old one. `opencode run` exits 0
+even after an error, so read its output.
 
 ## 4. Check OpenCode
 
