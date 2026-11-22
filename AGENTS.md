@@ -65,8 +65,8 @@ before you keep it.
   the user each root command with its expected output, and say which steps
   you did not run.
 - **Commits are unsigned.** Agents work unattended, so nothing waits on a
-  1Password signature. Squash merges, signed by GitHub, satisfy the signed
-  commits rule on `main`.
+  1Password signature. GitHub signs each squash merge, so `main` keeps a
+  verified history.
 
 ## Scripts
 
