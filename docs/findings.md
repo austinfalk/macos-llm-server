@@ -88,7 +88,7 @@ Splash's log, with a restart between each set. Medians, tok/s:
 | 9.8-10K | 234 | 187 | 233 | +25% |
 
 A 10K-token prompt starts in 43 s instead of 53. Prompts under about 700
-tokens are slower, but they take seconds either way, and cached follow-ups
+tokens are slower, but they take about 5 s either way, and cached follow-ups
 read only what is new. Decode is untouched, because the pair applies to
 prefill only.
 

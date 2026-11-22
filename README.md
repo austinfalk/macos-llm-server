@@ -33,7 +33,7 @@ When you finish:
 | Memory | 48 GB or more for the default model. With less, pick a smaller one before step 5 ([Models](#models)) |
 | Disk | About 25 GB for the model and its draft, plus Splash's SSD cache, which it sizes itself up to 32 GiB |
 | Software | [Homebrew](https://brew.sh) in `/opt/homebrew`, its default on Apple Silicon, and a [Tailscale](https://tailscale.com) account |
-| Time | About an hour, most of it the first download |
+| Time | Mostly the first download, about 19 GB, plus 41-128 s to calibrate the Neural Engine |
 
 The scripts pick the Splash build for the chip:
 
@@ -53,7 +53,7 @@ follows Splash's own instructions but has not run on such a Mac here yet.
 new prompt at about 180-240 tokens a second up to 34K tokens, 120 at 128K and
 80 at 239K. It writes about 37 tokens a second, 29-61 depending on the
 prompt, and 25 deep in a 239K-token conversation. An agent's first turn takes
-40 s to a minute and a half, and follow-ups start in about a second, because
+35-95 s, and follow-ups start in about a second, because
 Splash caches the conversation.
 Base M1 and M2 chips have fewer GPU cores and will be slower (not measured).
 Newer chips read prompts much faster. Local suits code that must not leave the
@@ -67,8 +67,8 @@ to run again.
 
 **If you are an agent:** run steps 1, 3 and 5 yourself. Hand steps 2, 4, 6 and
 7 to the user, with each command and what it should print: they need the
-Tailscale admin console, a browser login, System Settings or sudo. Step 5 can
-run for an hour on the first start, so run it in the background and follow
+Tailscale admin console, a browser login, System Settings or sudo. Step 5 waits
+up to an hour on the first start, so run it in the background and follow
 `~/Library/Logs/llm-server/splash.log`. If it is interrupted, run it again: it
 waits for the server already starting.
 
@@ -136,7 +136,7 @@ key expires. The script warns until you have. It also makes your account
 Tailscale's operator, so the next step needs no sudo.
 
 If the Mac ran Homebrew's `sudo brew services` tailscaled before, the script
-replaces it and the tailnet drops for a few seconds. The script finishes even
+replaces it and the tailnet drops while it restarts. The script finishes even
 if an SSH session drops with it.
 
 ### 5. Start the server
@@ -149,8 +149,9 @@ As yourself, not sudo. It generates the API key, installs the LaunchAgent,
 waits for the model, publishes it with `tailscale serve`, and checks that a
 request with the key gets 200 and one without gets 401. The first start
 downloads the model and its draft, about 19 GB, and times the Neural Engine
-against the GPU. That can take half an hour, and the script waits up to an
-hour. Later starts take about 30 s.
+against the GPU, which took 41-128 s here. How long the download takes depends
+on your connection, and the script waits up to an hour. Later starts take
+about 30 s.
 
 It prints what clients need:
 
@@ -262,9 +263,9 @@ model ID every client sends, so changing it means changing every client.
 | Chat page | The endpoint without `/v1`, such as `https://<machine>.<tailnet>.ts.net/`. It asks for the key |
 
 **After a restart**, log in over Screen Sharing. The server starts with your
-session and is ready a minute or two later. For a planned restart, use
-`sudo fdesetup authrestart`, which unlocks FileVault once, so the Mac reaches
-the login window with the tailnet up. After a crash or power cut, FileVault
+session, and Splash reports Ready about 28 s after it starts. For a planned
+restart, use `sudo fdesetup authrestart`, which unlocks FileVault once, so the
+Mac reaches the login window with the tailnet up. After a crash or power cut, FileVault
 waits for the password at the Mac itself.
 
 ### Update Splash
@@ -314,7 +315,8 @@ delete them.
 
 On either build, `3-services.sh` sees the new version in the LaunchAgent,
 restarts the server onto it, waits for the model and checks the endpoint. A
-new release recalibrates once, so the endpoint is down a few minutes.
+new release recalibrates once, so the endpoint was down 68-287 s in the
+upgrades measured here.
 Clients need no change.
 
 Then run `sudo sh scripts/verify.sh`. Besides the status codes, it asks a
@@ -328,7 +330,7 @@ fixed release. Record the result in `docs/findings.md`.
 ### Other changes
 
 - **Tailscale:** `brew upgrade tailscale`, then `sudo sh scripts/2-tailscale.sh`,
-  which copies the new daemon into place. The tailnet drops for a few seconds.
+  which copies the new daemon into place. The tailnet drops while it restarts.
 - **Model:** set `LLM_MODEL` in `config.env`, re-run `3-services.sh`, and give
   clients the new model ID and context window.
 - **HTTPS port:** set `LLM_HTTPS_PORT` (such as `8443`) and re-run

@@ -51,7 +51,7 @@ because it adds `/v1` itself.
 
 **Working with it.** The first turn is slow. On the M1 Max the server reads a
 new prompt at about 4-5 s per thousand tokens up to 34K tokens, and an agent's
-first prompt is 8-20K tokens, so expect 40 s to a minute and a half. Follow-ups
+first prompt is 8-20K tokens, so expect 35-95 s. Follow-ups
 start in about a second because the server
 caches the conversation, longer when a tool result adds a lot of text. A new
 session, a changed system prompt or tool set, or an edit to an earlier message
@@ -106,7 +106,9 @@ Or over SSH from the server, which needs Remote Login and your key on it
 ```
 
 The `.new` file keeps the old key if the command fails. When the server's key
-changes, run it again and nothing else.
+changes, run it again, then `opencode service restart`: OpenCode reads the
+file when it loads its config, and its background server keeps the key it
+read.
 
 **Check:**
 
