@@ -327,7 +327,7 @@ Install OpenCode from [its docs](https://opencode.ai/docs).
       },
       "models": {
         "mlx-community/Qwen3.8-27B-4bit": {
-          "name": "Qwen3.8 27B (Splash)",
+          "name": "Qwen3.8 27B",
           "reasoning": true,
           "limit": {"context": 262144, "input": 229376, "output": 32768}
         }
@@ -361,6 +361,12 @@ Install OpenCode from [its docs](https://opencode.ai/docs).
 Keep any other keys already in the file, and in an existing `agent` section
 set only each agent's `model`. `opencode debug config` shows how OpenCode read
 it.
+
+On the server itself, use the provider ID `local` instead of `tailnet`,
+everywhere it appears, and set `baseURL` to `http://127.0.0.1:8000/v1`. Keep
+both `name` values. OpenCode then shows the model as `Qwen3.8 27B` and the
+provider as `LLM server` on every machine, including in a remote session on
+the server. Only the provider ID and `baseURL` differ.
 
 Why:
 
