@@ -4,7 +4,8 @@ How to use the server from another Linux or macOS machine with Claude Code,
 Codex, Hermes Agent or OpenCode. Follow the steps in order, running each check
 before the next. Last followed on a Linux client on 2026-10-18 with Claude
 Code 2.1.302, Codex 0.163.0, Hermes Agent 0.21.1 and OpenCode 2.0.32
-([findings](findings.md#clients)).
+([findings](findings.md#clients)). OpenCode's step was last checked with
+OpenCode 2.3.2 on the server on 2026-11-21.
 
 **If you are an agent following this:** do one step at a time and run its
 check. If a check fails, or a command, flag or config key does not exist in
@@ -310,70 +311,90 @@ command that needs approval: the prompt must appear.
 
 ## 6. OpenCode
 
-Install OpenCode from [its docs](https://opencode.ai/docs).
+Install OpenCode 2 from [its docs](https://opencode.ai/docs).
 `~/.config/opencode/opencode.json` (OpenCode reads the key file itself):
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "provider": {
+  "model": "tailnet/mlx-community/Qwen3.8-27B-4bit",
+  "providers": {
     "tailnet": {
-      "npm": "@ai-sdk/openai-compatible",
       "name": "LLM server",
-      "options": {
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": {
         "baseURL": "ENDPOINT/v1",
         "apiKey": "{file:~/.config/llm-server/api-key}",
         "chunkTimeout": 1800000
       },
       "models": {
         "mlx-community/Qwen3.8-27B-4bit": {
-          "name": "Qwen3.8 27B (Splash)",
-          "reasoning": true,
+          "name": "Qwen3.8 27B",
+          "capabilities": {
+            "reasoning": {"supported": true, "effort": ["low", "medium", "high"]}
+          },
           "limit": {"context": 262144, "input": 229376, "output": 32768}
         }
       }
     }
   },
-  "model": "tailnet/mlx-community/Qwen3.8-27B-4bit",
-  "small_model": "tailnet/mlx-community/Qwen3.8-27B-4bit",
-  "agent": {
-    "build": {"model": "tailnet/mlx-community/Qwen3.8-27B-4bit"},
-    "plan": {"model": "tailnet/mlx-community/Qwen3.8-27B-4bit"},
-    "general": {"model": "tailnet/mlx-community/Qwen3.8-27B-4bit"},
-    "explore": {"model": "tailnet/mlx-community/Qwen3.8-27B-4bit"},
+  "agents": {
     "title": {"model": "tailnet/mlx-community/Qwen3.8-27B-4bit"},
-    "compaction": {"model": "tailnet/mlx-community/Qwen3.8-27B-4bit"},
-    "summary": {"model": "tailnet/mlx-community/Qwen3.8-27B-4bit"}
+    "summary": {"model": "tailnet/mlx-community/Qwen3.8-27B-4bit"},
+    "compaction": {"model": "tailnet/mlx-community/Qwen3.8-27B-4bit"}
   },
-  "permission": {
-    "edit": "ask",
-    "webfetch": "ask",
-    "bash": {
-      "*": "ask",
-      "git status": "allow", "git status *": "allow",
-      "git diff": "allow", "git diff *": "allow",
-      "ls": "allow", "ls *": "allow"
-    }
-  }
+  "permissions": [
+    {"action": "edit", "resource": "*", "effect": "ask"},
+    {"action": "webfetch", "resource": "*", "effect": "ask"},
+    {"action": "websearch", "resource": "*", "effect": "ask"},
+    {"action": "external_directory", "resource": "*", "effect": "ask"},
+    {"action": "shell", "resource": "*", "effect": "ask"},
+    {"action": "shell", "resource": "git status", "effect": "allow"},
+    {"action": "shell", "resource": "git status *", "effect": "allow"},
+    {"action": "shell", "resource": "git diff", "effect": "allow"},
+    {"action": "shell", "resource": "git diff *", "effect": "allow"},
+    {"action": "shell", "resource": "ls", "effect": "allow"},
+    {"action": "shell", "resource": "ls *", "effect": "allow"}
+  ]
 }
 ```
 
-Keep any other keys already in the file, and in an existing `agent` section
-set only each agent's `model`. `opencode debug config` shows how OpenCode read
-it.
+Keep any other keys already in the file. If it has OpenCode 1 keys
+(`provider`, `agent`, `permission` or `small_model`), move what you keep into
+`providers`, `agents` and `permissions` as the
+[migration guide](https://opencode.ai/docs/migrate-v1) describes, and delete
+the old keys. `opencode debug config` shows how OpenCode read the file.
+
+On the server itself, use the provider ID `local` instead of `tailnet`,
+everywhere it appears, and set `baseURL` to `http://127.0.0.1:8000/v1`. Keep
+both `name` values. OpenCode then shows the model as `Qwen3.8 27B` and the
+provider as `LLM server` on every machine, including in a remote session on
+the server. Also add these `policies`, so that the server's OpenCode offers
+only this model and never OpenCode's hosted free models:
+
+```json
+"policies": [
+  {"action": "provider.use", "resource": "*", "effect": "deny"},
+  {"action": "provider.use", "resource": "local", "effect": "allow"}
+]
+```
 
 Why:
 
-- `limit` and the per-agent `model` match the port's launcher. An agent's own
-  `model` outranks the top-level one, so each is pinned.
-- `reasoning: true` gives OpenCode 1.x its low, medium and high variants.
-  2.x logs the key as legacy and offers the variants without it. With none
-  chosen the server's `medium` applies.
-- `chunkTimeout`: by default OpenCode drops a stream after 5 silent minutes,
-  and a cold 31K-token prompt took 208 s to its first token.
-- `permission`: by default OpenCode edits files, runs commands and fetches
-  URLs without asking. These rules ask, except for a few read-only commands.
-  The last matching rule wins, so `*` comes first.
+- `limit` matches the port's launcher.
+- `agents`: OpenCode's docs do not say which model the hidden `title`,
+  `summary` and `compaction` agents use by default, so each is pinned. Build
+  and plan use the top-level `model`, and subagents use their session's model.
+- `capabilities.reasoning` gives the low, medium and high variants. With none
+  chosen, the server's `medium` applies.
+- `chunkTimeout`: Splash sends headers at once and its first token when it has
+  read the prompt, about 6 s per thousand tokens. OpenCode's default of 15
+  minutes between chunks would drop a cold prompt longer than about 150K
+  tokens.
+- `permissions`: by default OpenCode edits files, runs commands, fetches URLs,
+  searches the web and reads outside the project without asking. These rules
+  ask, except for a few read-only commands. The last matching rule wins, so
+  `*` comes first.
 
 **Check:**
 

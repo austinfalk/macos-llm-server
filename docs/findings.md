@@ -282,6 +282,18 @@ need all answered 200: a mid-conversation system message, a JSON-schema
 `summary` with `encrypted_content` null, and the second turn, which sends it
 back, still answers. Hermes first asks for Ollama's `POST /api/show`, gets 404, and goes on.
 
+**OpenCode 2.3.2 on the server, 2026-11-21 (1.6.1-m1.1).** The guide's
+config moved to OpenCode 2's keys (`providers`, `agents`, `permissions`,
+`capabilities.reasoning`). OpenCode 2 still reads the OpenCode 1 keys and
+ignores a model's `reasoning: true` (its migration guide). With the new
+config, `opencode run` and a follow-up answered. The log showed `low` for
+the title, `effort absent → medium` for the first turn, and `high` for a
+follow-up sent with `#high`. A streamed chat completion with an uncached
+6K-token prompt got its headers and an empty first chunk in 0.06 s, then
+nothing for the 49 s Splash took to read the prompt. So OpenCode's
+`chunkTimeout`, 15 minutes by default, is the limit that applies, and the
+config raises it to 30 minutes.
+
 **Claude Code cancels a turn that thinks for 10 minutes.** While the model
 thinks, Splash sends Claude Code only `ping` events. Claude Code accepts about
 five minutes of them, waits `CLAUDE_STREAM_IDLE_TIMEOUT_MS` (5 min by default)
