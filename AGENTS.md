@@ -64,8 +64,9 @@ before you keep it.
 - **You have no sudo** (`sudo -n` fails). Run what you can unprivileged. Give
   the user each root command with its expected output, and say which steps
   you did not run.
-- **Commits are signed** with the maintainer's SSH key through 1Password. If
-  signing fails, stop and ask. Never commit unsigned.
+- **Commits are unsigned.** Agents work unattended, so nothing waits on a
+  1Password signature. GitHub signs each squash merge, so `main` keeps a
+  verified history.
 
 ## Scripts
 
