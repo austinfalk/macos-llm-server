@@ -202,29 +202,40 @@ is not known. On a first M3 setup, `verify.sh`'s follow-up check is the test.
 
 ## Startup
 
-With the model already downloaded, the weights load in about 7 s, and Splash
-reports "Ready · context 256K" (262,144 tokens). A new build's first start
+With the model already downloaded, the weights load in about 6.5 s, and Splash
+reports "Ready · context 256K" (262,144 tokens) about 28 s after it starts. A new build's first start
 adds the Neural Engine calibration, 41-128 s in [Upgrades](#upgrades). Idle,
 wired memory was about 33 GiB.
 
 ## Speed
 
-Streamed chat completions at effort `medium` on 1.4.0-m1 (2026-10-31), timed
-on the client, three runs each, medians. Read is prompt tokens over the time
-to the first token. Write is completion tokens over the time after it. The
-prompts are this repository's files, each with a fresh nonce so cold cases
-stay cold.
+1.6.1-m1.1 with the pair at 0.68, on 2026-11-21, in the runs that chose the
+share ([Prefill as a pair of chunks](#prefill-as-a-pair-of-chunks)). Eight
+runs, each after a restart, on mains power, with thermals settled. Times and
+rates come from Splash's log.
 
-| Case | Prompt tokens | First token | Read, tok/s | Write, tok/s |
-|---|---|---|---|---|
-| A question about `verify.sh`, cold | 2,615 | 12.9 s | 203 | 44.0 |
-| Its follow-up, cached | 2,640-2,870 | 1.5 s | | 34.4 |
-| README and three scripts, cold | 12,107 | 60.4 s | 201 | 32.7 |
-| A short code request | 63-67 | 0.9 s | | 41.3 |
+| Measure | Result |
+|---|---|
+| Decode, six code prompts, thinking off, 384 tokens, greedy | median 37.3-37.6 tok/s per run; 28.5-61.4 by prompt, at 2.6-5.5 tokens per draft cycle |
+| Decode, three prompts thinking at `medium` | median 40.9-49.0 tok/s per run |
+| Decode after a 127.6K and a 238.8K-token prompt | 36 and 25 tok/s |
+| Cold prefill | 179 tok/s at 820 tokens, 236 at 2.9K, 239 at 11K, 206 at 34K, 122 at 128K, 80 at 239K |
+| First token of a short prompt | 0.27 s |
+| Cached follow-up of a 10K-token conversation | 1.0 s |
+| Start to "Ready" with a calibrated build | 28 s |
 
-On 1.3.2-m1.1, a 31,349-token cold prompt read at 151 tok/s and wrote 25.1,
-and its cached follow-up started in 1.1 s. Reading and writing both slow as
-the conversation grows.
+Decode depends on the prompt because each draft cycle costs the same and
+accepts a different number of tokens. The first runs of the day, while the
+Mac warmed up, decoded at 31.4-36.1, so only runs next to each other compare.
+Decode on 1.4.0-m1 (2026-10-31) was 32.7-44.0 tok/s on prompts of this
+repository's files, a different set.
+
+OpenCode's first turns on 2026-11-21, 8.7K and 9.6K tokens, got their first
+token in 42 and 50 s (209 and 193 tok/s), below the table's rate for two
+reasons. The first was the first request after a restart, and the first
+requests after a start read slower (21.4 s against 13.5 s for 2.9K tokens).
+The second waited 6.5 s for the weights after an idle release, and shared the
+GPU with OpenCode's title request.
 
 The port measured this checkpoint on an M1 Max at 61.5 tok/s on a code prompt
 and 51.5 over six mixed prompts, and Qwen3.6-35B-A3B at 127 tok/s
@@ -232,10 +243,9 @@ and 51.5 over six mixed prompts, and Qwen3.6-35B-A3B at 127 tok/s
 code. These prompts gave 3-4.6 tokens per draft cycle, against 6-7 on the
 port's code prompts *(sourced: port issue #11)*.
 
-**Agent sessions** (2026-10-18, 1.3.2-m1.1). The first commands of four
-coding agents sent prompts of 9,655 to 18,170 tokens and took 54 to 99 s of
-wall time. OpenCode's cached follow-up took 2 s. In one Claude Code session
-the context grew to 74,875 tokens with nothing refused or dropped. The time
+**A long session** (2026-10-18, 1.3.2-m1.1, the last one measured). Agents'
+first prompts were 9,655 to 18,170 tokens. In one Claude Code session the
+context grew to 74,875 tokens with nothing refused or dropped. The time
 went to thinking, not reading. A request at 70,916 tokens read only 196 new
 ones, and one request wrote 14,296 tokens at 21.2 tok/s. Two later turns, at
 95K tokens of context, thought for 794 and 843 s and finished.
@@ -244,7 +254,7 @@ ones, and one request wrote 14,296 tokens at 21.2 tok/s. Two later turns, at
 A streamed chat completion with an uncached 6K-token prompt got its headers
 and an empty first chunk in 0.06 s, then nothing for the 49 s Splash took to
 read the prompt. A client's timeout between chunks has to cover the whole
-read, so the client guide raises OpenCode's `chunkTimeout` from 15 to 30
+read, so the client guide raises OpenCode's `chunkTimeout` from 15 to 60
 minutes.
 
 **Idle release.** After 10 idle minutes Splash frees the weights. The next

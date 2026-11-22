@@ -50,9 +50,11 @@ Everything measured here ran on an M1 Max with 64 GB. The M3-and-later path
 follows Splash's own instructions but has not run on such a Mac here yet.
 
 **Expect it to be private, not fast.** On the M1 Max the default model reads a
-new prompt at about 160-235 tokens a second and writes 23-44, slower as a
-conversation grows. An agent's first turn takes one to two minutes, and
-follow-ups start in a second or two, because Splash caches the conversation.
+new prompt at about 180-240 tokens a second up to 34K tokens, 120 at 128K and
+80 at 239K. It writes about 37 tokens a second, 29-61 depending on the
+prompt, and 25 deep in a 239K-token conversation. An agent's first turn takes
+40 s to a minute and a half, and follow-ups start in about a second, because
+Splash caches the conversation.
 Base M1 and M2 chips have fewer GPU cores and will be slower (not measured).
 Newer chips read prompts much faster. Local suits code that must not leave the
 machine, batch and overnight work, and a private endpoint for your scripts.
@@ -148,7 +150,7 @@ waits for the model, publishes it with `tailscale serve`, and checks that a
 request with the key gets 200 and one without gets 401. The first start
 downloads the model and its draft, about 19 GB, and times the Neural Engine
 against the GPU. That can take half an hour, and the script waits up to an
-hour. Later starts take a minute or two.
+hour. Later starts take about 30 s.
 
 It prints what clients need:
 
