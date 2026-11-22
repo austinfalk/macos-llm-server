@@ -64,7 +64,7 @@ else
 	ok "started $SPLASH_LABEL"
 fi
 
-info "waiting for the model (the first start can take half an hour)"
+info "waiting for the model (the first start downloads about 19 GB and calibrates)"
 runs() { launchctl print "gui/$LLM_UID/$SPLASH_LABEL" 2>/dev/null | awk '$1 == "runs" {print $3; exit}'; }
 runs0=$(runs)
 crash_looping() { [ "$(runs)" -ge $((${runs0:-1} + 2)) ]; }

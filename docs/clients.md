@@ -40,9 +40,9 @@ Four facts shape every config:
   empty. OpenCode's config sets 32,768.
 - **The window `/v1/models` reports as `context_length`**, 262,144 tokens for
   the default model. If the server's differs, use its value and recompute the
-  limit derived from it, OpenCode's `input`. Sessions have reached 95K. If a
-  client fails near the limit, lower its window to 144,384, which OpenCode has
-  run with, and record it in [findings](findings.md).
+  limit derived from it, OpenCode's `input`. The server read prompts of 238.8K
+  tokens correctly ([findings](findings.md#prefill-as-a-pair-of-chunks)). If a
+  client fails near the limit, record it in [findings](findings.md).
 
 Any other client of the OpenAI API (chat completions or Responses) or of
 Anthropic's Messages API works with the key, the model ID and the base URL
@@ -50,8 +50,9 @@ Anthropic's Messages API works with the key, the model ID and the base URL
 because it adds `/v1` itself.
 
 **Working with it.** The first turn is slow. On the M1 Max the server reads a
-new prompt at about 6 s per thousand tokens, and an agent's first prompt is 8-20K tokens, so
-expect one to two minutes. Follow-ups start in about 2 s because the server
+new prompt at about 4-5 s per thousand tokens up to 34K tokens, and an agent's
+first prompt is 8-20K tokens, so expect 35-95 s. Follow-ups
+start in about a second because the server
 caches the conversation, longer when a tool result adds a lot of text. A new
 session, a changed system prompt or tool set, or an edit to an earlier message
 makes it read again from that point, so keep sessions going and turn off MCP
@@ -105,7 +106,9 @@ Or over SSH from the server, which needs Remote Login and your key on it
 ```
 
 The `.new` file keeps the old key if the command fails. When the server's key
-changes, run it again and nothing else.
+changes, run it again, then `opencode service restart`: OpenCode reads the
+file when it loads its config, and its background server keeps the key it
+read.
 
 **Check:**
 
@@ -133,7 +136,7 @@ Install OpenCode 2 from [its docs](https://opencode.ai/docs).
       "settings": {
         "baseURL": "ENDPOINT/v1",
         "apiKey": "{file:~/.config/llm-server/api-key}",
-        "chunkTimeout": 1800000
+        "chunkTimeout": 3600000
       },
       "models": {
         "mlx-community/Qwen3.8-27B-4bit": {
@@ -196,9 +199,9 @@ Why:
 - `capabilities.reasoning` gives the low, medium and high variants. With none
   chosen, the server's `medium` applies.
 - `chunkTimeout`: Splash sends headers at once and its first token when it has
-  read the prompt, about 6 s per thousand tokens. OpenCode's default of 15
-  minutes between chunks would drop a cold prompt longer than about 150K
-  tokens.
+  read the prompt, 17 minutes for 128K tokens and 50 for 239K. OpenCode's
+  default of 15 minutes between chunks drops a cold prompt longer than about
+  110K tokens. 60 minutes covers the `input` limit.
 - `permissions`: by default OpenCode edits files, runs commands, fetches URLs,
   searches the web and reads outside the project without asking. These rules
   ask, except for a few read-only commands. The last matching rule wins, so

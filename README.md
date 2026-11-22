@@ -30,10 +30,10 @@ When you finish:
 | | |
 |---|---|
 | Mac | Apple Silicon, macOS 26.4 or later, an administrator account |
-| Memory | 48 GB or more for the default model. With less, pick a smaller one before step 5 ([Models](#models)) |
-| Disk | About 25 GB for the model and its draft, plus Splash's SSD cache, which it sizes itself up to 32 GiB |
+| Memory | 36 GB or more for the default model. With less, pick a smaller one before step 5 ([Models](#models)) |
+| Disk | 19 GB for the model and its draft, as measured here, plus Splash's SSD cache, which it sizes itself up to 32 GiB |
 | Software | [Homebrew](https://brew.sh) in `/opt/homebrew`, its default on Apple Silicon, and a [Tailscale](https://tailscale.com) account |
-| Time | About an hour, most of it the first download |
+| Time | Mostly the first download, about 19 GB, plus about 45 s to calibrate the Neural Engine |
 
 The scripts pick the Splash build for the chip:
 
@@ -50,9 +50,11 @@ Everything measured here ran on an M1 Max with 64 GB. The M3-and-later path
 follows Splash's own instructions but has not run on such a Mac here yet.
 
 **Expect it to be private, not fast.** On the M1 Max the default model reads a
-new prompt at about 160-235 tokens a second and writes 23-44, slower as a
-conversation grows. An agent's first turn takes one to two minutes, and
-follow-ups start in a second or two, because Splash caches the conversation.
+new prompt at about 180-240 tokens a second up to 34K tokens, 120 at 128K and
+80 at 239K. It writes about 37 tokens a second, 29-61 depending on the
+prompt, and 25 deep in a 239K-token conversation. An agent's first turn takes
+35-95 s, and follow-ups start in about a second, because
+Splash caches the conversation.
 Base M1 and M2 chips have fewer GPU cores and will be slower (not measured).
 Newer chips read prompts much faster. Local suits code that must not leave the
 machine, batch and overnight work, and a private endpoint for your scripts.
@@ -65,8 +67,8 @@ to run again.
 
 **If you are an agent:** run steps 1, 3 and 5 yourself. Hand steps 2, 4, 6 and
 7 to the user, with each command and what it should print: they need the
-Tailscale admin console, a browser login, System Settings or sudo. Step 5 can
-run for an hour on the first start, so run it in the background and follow
+Tailscale admin console, a browser login, System Settings or sudo. Step 5 waits
+up to an hour on the first start, so run it in the background and follow
 `~/Library/Logs/llm-server/splash.log`. If it is interrupted, run it again: it
 waits for the server already starting.
 
@@ -74,7 +76,7 @@ waits for the server already starting.
 
 `git clone` it anywhere and `cd` into it. To change a setting, copy
 `config.env.example` to `config.env` and edit it. Every setting is explained
-there. **On a Mac with less than 48 GB, do this now and set `LLM_MODEL` from
+there. **On a Mac with less than 36 GB, do this now and set `LLM_MODEL` from
 [Models](#models)**: the default model does not fit, and step 5 downloads
 whatever `LLM_MODEL` names. Every other setting has a working default.
 
@@ -134,7 +136,7 @@ key expires. The script warns until you have. It also makes your account
 Tailscale's operator, so the next step needs no sudo.
 
 If the Mac ran Homebrew's `sudo brew services` tailscaled before, the script
-replaces it and the tailnet drops for a few seconds. The script finishes even
+replaces it and the tailnet drops while it restarts. The script finishes even
 if an SSH session drops with it.
 
 ### 5. Start the server
@@ -147,8 +149,9 @@ As yourself, not sudo. It generates the API key, installs the LaunchAgent,
 waits for the model, publishes it with `tailscale serve`, and checks that a
 request with the key gets 200 and one without gets 401. The first start
 downloads the model and its draft, about 19 GB, and times the Neural Engine
-against the GPU. That can take half an hour, and the script waits up to an
-hour. Later starts take a minute or two.
+against the GPU, which took 42.7 s for the current build. How long the
+download takes depends on your connection, and the script waits up to an
+hour. Later starts take about 30 s.
 
 It prints what clients need:
 
@@ -233,11 +236,10 @@ Set `LLM_MODEL` in `config.env` to what `--model` takes.
 
 | Mac memory | Model | Notes |
 |---|---|---|
-| 48 GB or more | `mlx-community/Qwen3.8-27B-4bit` (default) | Scores 34 on the Artificial Analysis Intelligence Index v4.3.2. Run here on 64 GB |
-| 48 GB or more, for speed | `mlx-community/Qwen3.6-35B-A3B-4bit` | 3B parameters active per token, so the port writes about twice as fast, but it scores 18 *(sourced)* |
-| 36-47 GB | The default may fit | Splash's README gave 36 GB as the 4-bit models' minimum and 48 GB as recommended, up to 1.4.0 *(sourced)*. Not run here |
-| 24-32 GB | `unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q2_K_XL` | Splash measured it on a 24 GB Mac with the full 256K context *(sourced)*. The port has not published a 24 GB measurement. Not run here |
-| Under 24 GB | None | Not covered by Splash or this guide |
+| 36 GB or more | `mlx-community/Qwen3.8-27B-4bit` (default) | Scores 34 on the Artificial Analysis Intelligence Index v4.3.2. 36 GB is the port's stated requirement *(sourced)*. Run here on 64 GB |
+| 36 GB or more, for speed | `mlx-community/Qwen3.6-35B-A3B-4bit` | 3B parameters active per token, so the port writes about 2.5 times as fast, but it scores 18 *(sourced)* |
+| 24-32 GB | `unsloth/Qwen3.8-27B-GGUF:UD-IQ3_XXS`, or `unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q2_K_XL` | Splash measured both on a 24 GB Mac: the 27B at 43.5 tok/s with 53K tokens of context, the 35B-A3B at 145 tok/s with the full 256K. The port names the 27B for 24 GB *(sourced)*. Not run here |
+| Under 24 GB | None in this guide | The port runs Ternary Bonsai 2 on 16 GB after raising the GPU's memory limit at each boot, with `--language-only` *(sourced)*. The guide's LaunchAgent sets up neither |
 
 Splash sizes memory and context at start and stops with a message if the
 model does not fit. A 27B GGUF small enough for 24 GB gets about 53K tokens of
@@ -260,9 +262,9 @@ model ID every client sends, so changing it means changing every client.
 | Chat page | The endpoint without `/v1`, such as `https://<machine>.<tailnet>.ts.net/`. It asks for the key |
 
 **After a restart**, log in over Screen Sharing. The server starts with your
-session and is ready a minute or two later. For a planned restart, use
-`sudo fdesetup authrestart`, which unlocks FileVault once, so the Mac reaches
-the login window with the tailnet up. After a crash or power cut, FileVault
+session, and Splash reports Ready about 28 s after it starts. For a planned
+restart, use `sudo fdesetup authrestart`, which unlocks FileVault once, so the
+Mac reaches the login window with the tailnet up. After a crash or power cut, FileVault
 waits for the password at the Mac itself.
 
 ### Update Splash
@@ -312,7 +314,8 @@ delete them.
 
 On either build, `3-services.sh` sees the new version in the LaunchAgent,
 restarts the server onto it, waits for the model and checks the endpoint. A
-new release recalibrates once, so the endpoint is down a few minutes.
+new release recalibrates once. Moving to the current build took the endpoint
+down for 70 s, and 1.7.0-m1, which also timed the chunk pair, for 287 s.
 Clients need no change.
 
 Then run `sudo sh scripts/verify.sh`. Besides the status codes, it asks a
@@ -326,7 +329,7 @@ fixed release. Record the result in `docs/findings.md`.
 ### Other changes
 
 - **Tailscale:** `brew upgrade tailscale`, then `sudo sh scripts/2-tailscale.sh`,
-  which copies the new daemon into place. The tailnet drops for a few seconds.
+  which copies the new daemon into place. The tailnet drops while it restarts.
 - **Model:** set `LLM_MODEL` in `config.env`, re-run `3-services.sh`, and give
   clients the new model ID and context window.
 - **HTTPS port:** set `LLM_HTTPS_PORT` (such as `8443`) and re-run
