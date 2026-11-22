@@ -219,10 +219,10 @@ failure.
 ### 8. Connect clients
 
 Follow [`docs/clients.md`](docs/clients.md) on each client device. Steps 1-2
-join the tailnet and copy the key, and the rest configure Claude Code, Codex,
-Hermes Agent or OpenCode. Any other OpenAI-compatible tool works with the
-endpoint, the model ID and the key. Splash's own launchers (`splash claude`
-and the others) reach only a server on the same Mac.
+join the tailnet and copy the key, step 3 configures OpenCode, and step 4
+checks it. The guide also says what any other OpenAI or Anthropic client
+needs. Splash's own launchers (`splash claude` and the others) reach only a
+server on the same Mac.
 
 ## Models
 
