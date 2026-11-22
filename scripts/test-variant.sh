@@ -55,13 +55,14 @@ upstream SPLASH_VERSION:set SPLASH_BIN:set SPLASH_RUN_DIR:set SPLASH_ARCHIVE_SHA
 none SPLASH_VERSION:empty SPLASH_BIN:empty SPLASH_RUN_DIR:empty
 VARIANTS
 
-# 1.6.1-m1.1's notes name a Neural Engine share for these chips only.
+# 1.6.1-m1.1's notes name a Neural Engine share for these chips only; the M1
+# Max's is the one measured here.
 while IFS='|' read -r variant brand want; do
 	CPU_BRAND=$brand
 	variant_values "$variant"
 	check "$variant on \"$brand\": serve args '$want'" "$SPLASH_SERVE_ARGS" "$want"
 done <<'ARGS'
-port|Apple M1 Max|--ane-ffn-share 0.735 --ane-ffn-minimum-rows 512
+port|Apple M1 Max|--ane-ffn-share 0.68 --ane-ffn-minimum-rows 512
 port|Apple M1 Pro|--ane-ffn-share 0.88 --ane-ffn-minimum-rows 512
 port|Apple M2 Max|--ane-ffn-share 0.53 --ane-ffn-minimum-rows 512
 port|Apple M1|

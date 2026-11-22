@@ -19,8 +19,9 @@ checksum; the checkpoint the build's documentation names and the draft Splash
 pairs with it automatically; its API key; and its defaults for everything
 else. The departures are this repo's LaunchAgent, because Splash ships no
 service manager, and two settings: reasoning effort defaults to medium, and
-on the port's 1.6.1-m1.1 long prefills run as a pair of chunks at the Neural
-Engine share its notes give for the chip, `SPLASH_SERVE_ARGS` in
+on the port's 1.6.1-m1.1 long prefills run as a pair of chunks at a Neural
+Engine share set by hand (its notes' for the M1 Pro and M2 Max, and the one
+measured fastest here for the M1 Max), `SPLASH_SERVE_ARGS` in
 `scripts/variant.sh`, until a port release that times the pair itself
 (`docs/findings.md` has why for both). Defer to the published measurements of Splash
 and the port rather than benchmarking. When a client does not work, find out

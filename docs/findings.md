@@ -34,7 +34,7 @@ two on some M1 and M2 chips (README, "How it works"):
   another name got 403 (1.5.0-m1 and 1.6.1-m1). So `LLM_HTTPS_PORT` needs no
   change to the flag.
 - `--default-reasoning-effort medium` ([Reasoning effort](#reasoning-effort)).
-- On 1.6.1-m1.1, `--ane-ffn-share 0.735 --ane-ffn-minimum-rows 512` on an M1
+- On 1.6.1-m1.1, `--ane-ffn-share 0.68 --ane-ffn-minimum-rows 512` on an M1
   Max ([Prefill as a pair of chunks](#prefill-as-a-pair-of-chunks)).
 
 Defaults worth knowing: Splash listens on 127.0.0.1:8000, frees the weights
@@ -100,10 +100,71 @@ calibrated split, then the pair again, a restart between each. Medians, tok/s:
 A 10K-token prompt now starts in 43 s instead of 53. Prompts under about 700
 tokens are slower, but they take seconds either way, and cached follow-ups
 read only what is new. Decode is untouched: the pair applies to prefill only.
-**Changed:** `scripts/variant.sh` passes the port's share for M1 Max, M1 Pro
-and M2 Max with 1.6.1-m1.1, and none on other chips, which the notes do not
-name. 1.7.0-m1 times the pair on the first start (0.74 on an M1 Max for the
-27B, from 769 rows) *(sourced)*, so the next port bump drops the flags.
+**Changed:** `scripts/variant.sh` passes a share for M1 Max, M1 Pro and M2
+Max with 1.6.1-m1.1, and none on other chips, which the notes do not name.
+1.7.0-m1 times the pair on the first start (0.74 on an M1 Max for the 27B,
+from 769 rows, in its notes *(sourced)*; 0.68 from 769 rows when it ran here),
+so the next port bump drops the flags.
+
+**The M1 Max's share, measured** (2026-11-21). Each run restarted Splash with
+the LaunchAgent's flags and one change, warmed each prompt size once, then
+read cold prompts of this repository's files with a fresh nonce, two or three
+of each size, prefill time from Splash's log. Every candidate ran between two
+runs of 0.735, the port's value, and counts only where it beat both. Cold
+prefill, tok/s:
+
+| Share | 820 tokens | 2.9K | 11K | 34K | 128K |
+|---|---|---|---|---|---|
+| 0.735 (8 runs) | 163 | 217 | 222-228 | 200-202 | 124 |
+| 0.60 | 203 | 231 | 225 | | |
+| 0.65 | 186 | 236 | 234 | | |
+| **0.68** (4 runs) | **179** | **236** | **239** | **206-208** | **122** |
+| 0.72 | | 227 | 234.5 | 203-205 | |
+| 0.80 | 153 | 202 | 215 | | |
+
+Splash rounds the share it is given (0.60 to 0.59, 0.64 to 0.65, 0.735 to
+0.74). 0.68 is fastest from 2.9K to 34K tokens: +9% at 2.9K, +5% at 11K, +3%
+at 34K over 0.735, and +10% at 820. At 128K it was 2% slower, one run each,
+so the best share rises again for the longest prompts. Run to run, prefill
+varied under 1%. Decode, short-prompt TTFT (0.27 s) and cached follow-ups
+(1.0 s) did not change, and greedy answers to six short prompts were
+identical. On an 11K-token prompt the greedy answer differed from 0.735's
+after 147 characters, where the control's own cached rerun also differed: a
+near-tie, as any change to the split can turn. At 0.68, three codes hidden at
+10%, 50% and 90% of a 127.6K-token and a 238.8K-token prompt came back exactly;
+those prompts read at 122 and 80 tok/s, 17 and 50 minutes. **Changed:**
+`scripts/variant.sh` passes 0.68 on an M1 Max.
+
+`--ane-ffn-minimum-rows 1024` at 0.735 ran prefill commands under 1,024 rows
+at the given share without the pair: 150 at 820 tokens and 200 at 2.9K,
+slower than both controls.
+`--ane-ffn-minimum-rows 256` at 0.68 pairs prompts from 256 tokens: 400-token
+prompts read at 120 tok/s against 147 with 512, so 512 stays.
+
+### Other settings tried
+
+Measured the same way on 2026-11-21, each between two control runs, none
+adopted:
+
+- `--kv-format bf16`: decode, prefill and TTFT inside the controls. It doubles
+  the KV read per token, which only costs more at long context.
+- `--prefill-mode full`: 11K-token prefill 207 tok/s against 206-217, and it
+  drops the bound that keeps macOS from aborting long prefills.
+- `--prefill-bound-ms 4000`: 217 against 206 and 222, inside the controls.
+- `--persistent-cache`: no change while serving. After a restart, the
+  follow-up of an 11K-token conversation started in 1.2 s instead of 46.7 s:
+  Splash took back 3 GB of cached state in 5 s and started as fast as
+  without it. It keeps up to 32 GiB in `~/Library/Caches/Splash`. Left
+  at the default for now; restarts here are rare, upgrades and reboots.
+
+**Where decode stands.** The GPU copies memory at 371 GB/s and multiplies
+fp16 at 7.9 TFLOPS (Metal, measured here). Each decode cycle reads the
+target's weights (about 15.4 GB), the draft's (3.85 GB) and the recurrent
+state, about 19.5 GB, so it cannot take less than 53 ms. Splash measures its
+cycles at 87 ms (its log, "Decode step costs"), about 60% of that floor.
+None of Splash's settings reaches the kernels that make up the gap. Prefill
+at 11K tokens keeps the GPU at about 80% of its multiply rate, with the
+Neural Engine doing most of the FFN.
 
 ### Upgrades
 

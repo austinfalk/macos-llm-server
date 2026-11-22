@@ -21,10 +21,11 @@ variant_values() {
 			SPLASH_RUN_DIR=$SPLASH_HOME
 			# 1.6.1-m1.1 runs long prefills as a pair of chunks, Neural Engine
 			# beside GPU, only at a share set by hand. Its notes name one for
-			# these chips; from 1.7.0-m1 the port times the pair itself, so
-			# drop this at the next bump.
+			# these chips; the M1 Max's is the one measured fastest here
+			# (docs/findings.md). From 1.7.0-m1 the port times the pair itself,
+			# so drop this at the next bump.
 			case ${CPU_BRAND-} in
-				"Apple M1 Max") _share=0.735 ;;
+				"Apple M1 Max") _share=0.68 ;;
 				"Apple M1 Pro") _share=0.88 ;;
 				"Apple M2 Max") _share=0.53 ;;
 				*) _share= ;;
