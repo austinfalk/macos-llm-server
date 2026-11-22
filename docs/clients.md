@@ -2,8 +2,7 @@
 
 How to use the server from another Linux or macOS machine with OpenCode.
 Follow the steps in order, running each check before the next. Last followed
-on a Linux client on 2026-11-21 with OpenCode 2.3.2, and on the server the
-same day ([findings](findings.md#clients)).
+on 2026-11-21 with OpenCode 2.3.2, on a Linux client and on the server.
 
 **If you are an agent following this:** do one step at a time and run its
 check. If a check fails, or a command, flag or config key does not exist in
