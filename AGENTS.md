@@ -2,93 +2,93 @@
 
 A guide and scripts for running a private model server on an Apple Silicon Mac
 with [Splash](https://github.com/incoai/splash), behind `tailscale serve`. An
-M3 or later runs Splash itself, and an M1 or M2 runs its port,
-[paperniuk/splash](https://github.com/paperniuk/splash). `README.md` is the
-guide, and `docs/findings.md` the measurements behind it. **`NEXT.md`, if
-present, is the state of the machine this checkout runs on and what is left to
-do. Read it first.** It is local to that machine and not tracked.
+M3 or later runs Splash. An M1 or M2 runs its port,
+[paperniuk/splash](https://github.com/paperniuk/splash).
 
-**On a client machine** (not the server), the task is to connect it. Follow
-`docs/clients.md` step by step. The server's scripts do not run there.
+**Read `NEXT.md` first if it exists.** It is untracked and holds the state of
+the machine this checkout runs on and the work left on it.
 
-## Principle
+**On a client machine**, follow `docs/clients.md` step by step. The server's
+scripts do not run there.
 
-Use the Splash build for the chip as it ships: Splash's Homebrew formula on an
-M3 or later, or the port's release installer on an M1 or M2, pinned by
-checksum; the checkpoint the build's documentation names and the draft Splash
-pairs with it automatically; its API key; and its defaults for everything
-else. The departures are this repo's LaunchAgent, because Splash ships no
-service manager, and two settings: reasoning effort defaults to medium, and
-on the port's 1.6.1-m1.1 long prefills run as a pair of chunks at a Neural
-Engine share set by hand (its notes' for the M1 Pro and M2 Max, and the one
-measured fastest here for the M1 Max), `SPLASH_SERVE_ARGS` in
-`scripts/variant.sh`, until a port release that times the pair itself
-(`docs/findings.md` has why for both). Defer to the published measurements of Splash
-and the port rather than benchmarking. When a client does not work, find out
-whether Splash or the port documents the behaviour before changing anything
-here, and do not work around it with request rewriting or proxies; record it
-and wait for a release.
+## Where things are
 
-## Layout
+- `README.md` is the setup guide, including "Update Splash".
+- `docs/findings.md` holds the measurements behind each setting and upgrade.
+- `docs/clients.md` is the guide for connecting a client.
+- `scripts/` holds the numbered setup steps, `verify.sh` and `uninstall.sh`.
+  Every script sources `lib.sh`, which sources `variant.sh`.
+- `scripts/variant.sh` holds each build's version, checksums and
+  `SPLASH_SERVE_ARGS`.
+- `config/` holds the tailnet policy and the templates that the setup steps
+  install. `render()` in `lib.sh` fills their `@PLACEHOLDERS@`. `config.env`
+  is untracked and overrides the defaults in `lib.sh`.
+- Every file describes the current setup. Removed engines and tools stay in
+  git history only.
 
-- `scripts/` holds the numbered setup steps, `verify.sh`, `uninstall.sh`, and
-  the checks CI runs, `test-variant.sh` and `check-public.sh`. Everything
-  sources `lib.sh`, which sources `variant.sh` for each build's values.
-- `config/` holds the tailnet policy, and templates that `3-services.sh`
-  (Splash's LaunchAgent) and the hardening step (pf, sshd, battery watchdog)
-  install, with `@PLACEHOLDERS@` filled by `render()` in `lib.sh`. `config.env`
-  (gitignored) overrides the defaults in `lib.sh`.
-- `docs/` holds `findings.md`, the measurements of the server's speed,
-  settings and upgrades, and `clients.md`, the guide for connecting a client
-  device.
+## How the server is meant to run
 
-## Conventions
+Run the Splash build for the chip as it ships: its checkpoint, the draft it
+pairs with that checkpoint, its API key and its defaults. This repo adds only
+what Splash lacks or what a measurement justifies:
 
-- Scripts are POSIX `sh` and must pass `shellcheck -x -s sh` from the repo root.
-- Setup scripts are idempotent and **verify their own result before reporting
-  success**. A script that changes services must never leave the endpoint down
-  without saying so and printing how to recover.
-- `1-install.sh` and `3-services.sh` run as the user (Homebrew refuses root,
-  and Splash runs in the user's login session, where macOS gives it the GPU
-  and the Neural Engine); `2-tailscale.sh`, `4-harden.sh`, `verify.sh` and
-  `uninstall.sh` need sudo.
-- Root-installed files live outside the checkout (`/usr/local/etc/llm-server`,
-  `/usr/local/sbin`, `/Library/...`); Splash, its LaunchAgent and its log live
-  under the user's `~/Library`. Nothing reads files from this repo at run time.
-- Each build's pins live in `scripts/variant.sh`. On an M3 or later, Splash
-  comes from the Homebrew formula `incoai/tap/splash`, pinned by
-  `SPLASH_VERSION`, `SPLASH_ARCHIVE_SHA256` and `SPLASH_BOTTLE_SHA256`.
-  `1-install.sh` refuses a formula whose version or checksums differ, and runs
-  `brew pin splash` after installing, so `brew upgrade` does not move it. On an
-  M1 or M2, Splash comes from the port's release installer, `install-m1.sh`,
-  pinned by `SPLASH_VERSION` and `SPLASH_INSTALLER_SHA256`. `1-install.sh`
-  refuses an installer whose SHA-256 differs. The installer keeps each version
-  under `~/Library/Application Support/Splash-M1` and points `current` and the
-  command at the version installed last. Call Splash by path, `SPLASH_BIN`
-  (`$(brew --prefix)/bin/splash` or `splash-m1`), never a version's folder. A
-  new release is a deliberate bump of the build's values, never a side effect
-  of `brew upgrade`.
-- Only `scripts/lib.sh` sets `SPLASH_VARIANT`, from the chip, with a plain
-  assignment that neither `config.env` nor the environment can override. A
-  build chosen by hand could install a Splash that refuses the Mac's GPU.
-  `scripts/test-variant.sh` checks both in CI.
-- Restart launchd jobs with `start_job`/`stop_job` from `lib.sh`: `launchctl
-  bootout` is asynchronous and an immediate `bootstrap` fails.
-- Claude has no sudo here (`sudo -n` fails). Test what can run unprivileged;
-  hand root commands to the user with the expected output, and say plainly which
-  paths have not been run.
-- Never print the API key or put it on a command line: pass it to curl on stdin
-  (`curl_hdr` in `lib.sh`), and to Splash in `SPLASH_API_KEY`, which the
-  LaunchAgent's shell reads from the key file at start.
-- Record measurements of the server's speed, settings and upgrades in
-  `docs/findings.md`, with what they changed.
-- Every file describes the current setup. Engines and tools the server no
-  longer uses stay in git history, not in the docs.
-- The repository is public, so nothing personal enters any file, commit
-  message or PR text: no usernames, real hostnames or tailnet names, the
-  machines' IP addresses, home directory paths, or email addresses other than
-  noreply and `example.com` ones. Use the placeholders, such as
-  `<machine>.<tailnet>.ts.net` and `100.64.0.0/10`. `scripts/check-public.sh`
-  checks tracked files in CI.
-- Commits are signed with the maintainer's SSH signing key through 1Password.
-  If signing fails, say so and ask; do not fall back to unsigned commits.
+- a LaunchAgent, because Splash ships no service manager
+- the hardening step: pf, sshd and a battery watchdog
+- the flags in `config/com.llmserver.splash.plist` and `SPLASH_SERVE_ARGS`,
+  each with its reason in `docs/findings.md`
+
+To change a setting, use Splash's or the port's published numbers when they
+cover the case. When they do not, measure on this machine. Keep the change
+only if the measurement supports it, and record it in `docs/findings.md`.
+
+When a client does not work, check Splash's and the port's docs and issues
+first. Do not work around the problem with request rewriting or a proxy.
+Record the behaviour and wait for a release.
+
+A new Splash release is a deliberate bump of the build's block in
+`variant.sh`. Follow "Update Splash" in `README.md`, and run `verify.sh`
+before you keep it.
+
+## Rules
+
+- **Never print the API key or put it on a command line.** A session once
+  printed it, and the key had to be replaced. Pass it to curl on stdin with
+  `curl_hdr` from `lib.sh`. Splash gets it in `SPLASH_API_KEY`, which the
+  LaunchAgent reads from the key file at start.
+- **The repository is public.** Keep usernames, real hostnames, tailnet names,
+  IP addresses, home directory paths and email addresses out of every file,
+  commit message and PR text. Use the placeholders `<machine>.<tailnet>.ts.net`
+  and `100.64.0.0/10`, and `noreply` or `example.com` addresses.
+  `check-public.sh` scans tracked files only, so check commit messages and PR
+  text yourself.
+- **You have no sudo** (`sudo -n` fails). Run what you can unprivileged. Give
+  the user each root command with its expected output, and say which steps
+  you did not run.
+- **Commits are signed** with the maintainer's SSH key through 1Password. If
+  signing fails, stop and ask. Never commit unsigned.
+
+## Scripts
+
+- Write POSIX `sh`. Before you commit, run what CI runs:
+
+  ```sh
+  shellcheck -x -s sh scripts/*.sh config/*.sh
+  sh scripts/test-variant.sh
+  sh scripts/check-public.sh
+  ```
+
+- Make setup scripts idempotent, and have each one check its own result
+  before it reports success. A script that stops the endpoint must say so and
+  print how to recover.
+- `1-install.sh` and `3-services.sh` run as the user. Homebrew refuses root,
+  and macOS gives Splash the GPU and the Neural Engine only in the user's login
+  session. `2-tailscale.sh`, `4-harden.sh`, `verify.sh` and `uninstall.sh` need
+  sudo.
+- Install root-owned files outside the checkout, under `/usr/local/etc/llm-server`,
+  `/usr/local/sbin` or `/Library`. Nothing reads this repo at run time.
+- Call Splash by `SPLASH_BIN`, never by a version's folder.
+- Only `lib.sh` sets `SPLASH_VARIANT`, from the chip. A build chosen by hand
+  can install a Splash that refuses the GPU.
+- Restart launchd jobs with `start_job` and `stop_job` from `lib.sh`.
+  `launchctl bootout` returns before the job is gone, so an immediate
+  `bootstrap` fails.
