@@ -174,6 +174,9 @@ Keep any other keys already in the file. If it has OpenCode 1 keys
 [migration guide](https://opencode.ai/docs/migrate-v1) describes, and delete
 the old keys. `opencode debug config` shows how OpenCode read the file.
 
+If a package manager installed OpenCode (Homebrew, mise), add
+`"update": "disable"`, so OpenCode leaves updates to it.
+
 On the server itself, use the provider ID `local` instead of `tailnet`,
 everywhere it appears, and set `baseURL` to `http://127.0.0.1:8000/v1`. Keep
 both `name` values. OpenCode then shows the model as `Qwen3.8 27B` and the
