@@ -358,13 +358,14 @@ else at Splash's defaults:
   that name no effort get `medium` instead of the template's `xhigh`, which
   took far longer for a small gain and sometimes answered empty
   ([findings](docs/findings.md#reasoning-effort)).
-- `--ane-ffn-share 0.735 --ane-ffn-minimum-rows 512`, on an M1 Max with the
+- `--ane-ffn-share 0.68 --ane-ffn-minimum-rows 512`, on an M1 Max with the
   port's 1.6.1-m1.1 (0.88 on an M1 Pro, 0.53 on an M2 Max, none on other
-  chips): prompts of about 700 tokens or more read as a pair of chunks, the
-  Neural Engine on one while the GPU works on the other, about a fifth faster
-  on long prompts and a little slower on short ones. The values are the
-  port's ([findings](docs/findings.md#prefill-as-a-pair-of-chunks)). From
-  1.7.0-m1 the port times the pair itself, so the next bump drops them.
+  chips): prompts of 512 tokens or more read as a pair of chunks, the Neural
+  Engine on one while the GPU works on the other, about a quarter faster on
+  10K-token prompts and a little slower under 1K. The M1 Pro and M2 Max
+  values are the port's; the M1 Max's was measured here, a little below the
+  port's 0.735 ([findings](docs/findings.md#prefill-as-a-pair-of-chunks)).
+  From 1.7.0-m1 the port times the pair itself, so the next bump drops them.
 
 Splash listens on 127.0.0.1:8000, its default, so `tailscale serve` is the only
 way in. The LaunchAgent's shell reads the key file into `SPLASH_API_KEY` and
