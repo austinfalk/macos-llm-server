@@ -26,7 +26,7 @@ two on some M1 and M2 chips (README, "How it works"):
 - `--allowed-host <machine>.<tailnet>.ts.net`. Without it, Splash answers 403
   to what `tailscale serve` passes on. The check ignores the port. With the
   flag, a Host with no port, `:443` or `:8443` got 200, and another name got
-  403 (1.5.0-m1 and 1.6.1-m1). So `LLM_HTTPS_PORT` needs no change to the flag.
+  403 (1.6.1-m1.1, 2026-11-21). So `LLM_HTTPS_PORT` needs no change to the flag.
 - `--default-reasoning-effort medium` ([Reasoning effort](#reasoning-effort)).
 - On 1.6.1-m1.1, `--ane-ffn-share 0.68 --ane-ffn-minimum-rows 512` on an M1
   Max ([Prefill as a pair of chunks](#prefill-as-a-pair-of-chunks)).
@@ -77,20 +77,13 @@ and 0.53 for an M2 Max. They report +18-19% cold prefill on the 27B at 2.1K to
 16.7K tokens and -5% at 560, with logits as close to the GPU alone as the
 calibrated split (KL 0.00057 against 0.00050) *(sourced)*.
 
-**The pair at 0.735 against the calibrated split** (2026-11-21). Cold prompts
-of this repository's files with a fresh nonce and one output token, TTFT from
-Splash's log, with a restart between each set. Medians, tok/s:
-
-| Prompt | Pair (3 runs) | Calibrated (4 runs) | Pair again (4 runs) | Change |
-|---|---|---|---|---|
-| 820 tokens | 164 | 190 | 164 | -14% |
-| 2.9K | 213 | 194 | 212 | +10% |
-| 9.8-10K | 234 | 187 | 233 | +25% |
-
-A 10K-token prompt starts in 43 s instead of 53. Prompts under about 700
-tokens are slower, but they take about 5 s either way, and cached follow-ups
-read only what is new. Decode is untouched, because the pair applies to
-prefill only.
+**Against the calibrated split** (2026-11-21). The calibrated split alone,
+with no pair, read cold prompts of this repository's files at 190 tok/s at 820
+tokens, 194 at 2.9K and 187 at 10K (medians of 4 runs, TTFT from Splash's
+log). The pair at 0.68 reads them at 179, 236 and 239 (table below): 6% slower
+at 820 tokens and 28% faster at 10K. Prompts under about 700 tokens take
+about 5 s either way, and cached follow-ups read only what is new. Decode is
+untouched, because the pair applies to prefill only.
 
 **The M1 Max's share** (2026-11-21). Each run restarted Splash with the
 LaunchAgent's flags and one change, warmed each prompt size once, then read
@@ -167,10 +160,6 @@ Every installer's SHA-256 matched its release notes.
 
 | Date | Version | Down | Neural Engine share | Result |
 |---|---|---|---|---|
-| 2026-10-31 | 1.3.2-m1.1 to 1.4.0-m1 | 89 s | 0.47, in 54.9 s | Passed |
-| 2026-11-07 | 1.4.0-m1 to 1.5.0-m1 | 68 s | 0.47, in 41.4 s | Passed |
-| 2026-11-07 | 1.5.0-m1 to 1.6.0-m1 | | | **Rolled back.** Requests hung, as in port issue #51 *(sourced)* |
-| 2026-11-14 | 1.5.0-m1 to 1.6.1-m1 | 104 s | 0.47, in 74.3 s | Passed. The hang is gone |
 | 2026-11-21 | 1.6.1-m1 to 1.7.0-m1 | 287 s | 0.50, in 127.5 s, plus 114.5 s timing the chunk pair | **Rolled back.** Follow-ups wrote nonsense |
 | 2026-11-21 | 1.7.0-m1 to 1.6.1-m1.1 | 70 s | 0.47, in 42.7 s | Passed. 16 of 16 graded follow-ups |
 
@@ -192,9 +181,8 @@ matched on 2026-11-21, and none was filed. **Changed:** the port is pinned at
 1.6.1-m1.1, and `verify.sh` asks the 3+3 follow-up and fails unless it answers
 6, because the status checks passed on the broken build.
 
-Without the pair, 1.6.1-m1.1 decodes and prefills this checkpoint as 1.6.1-m1
-does *(sourced)*. The port's open issue #63, decode slowing after about a day
-of uptime, applies to every version *(sourced)*.
+The port's open issue #63, decode slowing after about a day of uptime,
+applies to every version *(sourced)*.
 
 **Splash 1.7.0 is pinned for M3 and later**, as released. It has not run
 here, and whether the 1.7.0-m1 failure comes from Splash's code or the port's
@@ -204,7 +192,8 @@ is not known. On a first M3 setup, `verify.sh`'s follow-up check is the test.
 
 With the model already downloaded, the weights load in about 6.5 s, and Splash
 reports "Ready · context 256K" (262,144 tokens) about 28 s after it starts. A new build's first start
-adds the Neural Engine calibration, 41-128 s in [Upgrades](#upgrades). Idle,
+adds the Neural Engine calibration, 42.7 s for 1.6.1-m1.1
+([Upgrades](#upgrades)). Idle,
 wired memory was about 33 GiB.
 
 ## Speed
@@ -225,10 +214,7 @@ rates come from Splash's log.
 | Start to "Ready" with a calibrated build | 28 s |
 
 Decode depends on the prompt because each draft cycle costs the same and
-accepts a different number of tokens. The first runs of the day, while the
-Mac warmed up, decoded at 31.4-36.1, so only runs next to each other compare.
-Decode on 1.4.0-m1 (2026-10-31) was 32.7-44.0 tok/s on prompts of this
-repository's files, a different set.
+accepts a different number of tokens.
 
 OpenCode's first turns on 2026-11-21, 8.7K and 9.6K tokens, got their first
 token in 42 and 50 s (209 and 193 tok/s), below the table's rate for two
@@ -239,28 +225,21 @@ GPU with OpenCode's title request.
 
 The port measured this checkpoint on an M1 Max at 61.5 tok/s on a code prompt
 and 51.5 over six mixed prompts, and Qwen3.6-35B-A3B at 127 tok/s
-*(sourced)*. Writing is slower here because thinking prose drafts worse than
-code. These prompts gave 3-4.6 tokens per draft cycle, against 6-7 on the
-port's code prompts *(sourced: port issue #11)*.
+*(sourced)*. Writing is slower here because these prompts draft worse: 2.6-5.5
+tokens per draft cycle, median 3.35, against 6-7 on the port's code prompts
+*(sourced: port issue #11)*.
 
-**A long session** (2026-10-18, 1.3.2-m1.1, the last one measured). Agents'
-first prompts were 9,655 to 18,170 tokens. In one Claude Code session the
-context grew to 74,875 tokens with nothing refused or dropped. The time
-went to thinking, not reading. A request at 70,916 tokens read only 196 new
-ones, and one request wrote 14,296 tokens at 21.2 tok/s. Two later turns, at
-95K tokens of context, thought for 794 and 843 s and finished.
+**Splash sends no tokens while it reads a prompt** (2026-11-21, 1.6.1-m1.1). A
+streamed chat completion with an uncached prompt got its headers and an empty
+first chunk in 0.06 s, then nothing until Splash had read the prompt: 17
+minutes for 127.6K tokens and 50 for 238.8K. A client's timeout between chunks
+has to cover the whole read, so the client guide raises OpenCode's
+`chunkTimeout` from 15 to 60 minutes.
 
-**Splash sends no tokens while it reads a prompt** (2026-11-21, 1.6.1-m1.1).
-A streamed chat completion with an uncached 6K-token prompt got its headers
-and an empty first chunk in 0.06 s, then nothing for the 49 s Splash took to
-read the prompt. A client's timeout between chunks has to cover the whole
-read, so the client guide raises OpenCode's `chunkTimeout` from 15 to 60
-minutes.
-
-**Idle release.** After 10 idle minutes Splash frees the weights. The next
-request waited 6 s more while they were restored ("Weights restored in
-5.98 s"), and nothing else was slower. `--idle-release off` is the option if
-those 6 s matter *(sourced: incoai/splash #292)*.
+**Idle release.** After 10 idle minutes Splash frees the weights, and the next
+request waits for them ("Weights restored in 6.47 s" in Splash's log on
+2026-11-21). `--idle-release off` is the option if those seconds matter
+*(sourced: incoai/splash #292)*.
 
 **Other hardware.** Hosted providers serve this model at hundreds of tokens a
 second, and Apple quotes an M5 Max at 6.7 times an M1 Max on prompt
@@ -268,16 +247,17 @@ processing *(sourced)*.
 
 ## Heat
 
-On 2026-09-24, before Splash, the Mac decoded continuously for ten minutes,
-plugged in with the lid open. The GPU stayed at its full 1,290 MHz and about
-34 W for all 120 samples, and decode did not slow, although macOS reported
-thermal pressure Heavy from 8.7 minutes. What happens if Heavy lasts is
-unknown.
+In the runs above, on mains power with the lid open, macOS reported thermal
+state `fair` within minutes of the first request. Decode on the first three
+control runs fell from 36.1 to 33.5 to 31.4 tok/s as the Mac warmed, then
+held at 37.3-37.8 for the rest of the day, so only runs next to each other
+are compared. What happens under longer sustained load is not measured.
 
 ## Not measured
 
 - Any Mac other than this one: an M2, an M3 or later, or less than 64 GB.
-- Heat under Splash ([Heat](#heat) is from before it).
+- Heat under hours of continuous load. The runs in [Heat](#heat) restarted
+  Splash about every 6 minutes.
 - Coding quality. The guide defers to published results.
 - How much time `medium` saves on a real session.
 

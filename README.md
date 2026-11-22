@@ -33,7 +33,7 @@ When you finish:
 | Memory | 48 GB or more for the default model. With less, pick a smaller one before step 5 ([Models](#models)) |
 | Disk | About 25 GB for the model and its draft, plus Splash's SSD cache, which it sizes itself up to 32 GiB |
 | Software | [Homebrew](https://brew.sh) in `/opt/homebrew`, its default on Apple Silicon, and a [Tailscale](https://tailscale.com) account |
-| Time | Mostly the first download, about 19 GB, plus 41-128 s to calibrate the Neural Engine |
+| Time | Mostly the first download, about 19 GB, plus about 45 s to calibrate the Neural Engine |
 
 The scripts pick the Splash build for the chip:
 
@@ -149,9 +149,9 @@ As yourself, not sudo. It generates the API key, installs the LaunchAgent,
 waits for the model, publishes it with `tailscale serve`, and checks that a
 request with the key gets 200 and one without gets 401. The first start
 downloads the model and its draft, about 19 GB, and times the Neural Engine
-against the GPU, which took 41-128 s here. How long the download takes depends
-on your connection, and the script waits up to an hour. Later starts take
-about 30 s.
+against the GPU, which took 42.7 s for the current build. How long the
+download takes depends on your connection, and the script waits up to an
+hour. Later starts take about 30 s.
 
 It prints what clients need:
 
@@ -315,8 +315,8 @@ delete them.
 
 On either build, `3-services.sh` sees the new version in the LaunchAgent,
 restarts the server onto it, waits for the model and checks the endpoint. A
-new release recalibrates once, so the endpoint was down 68-287 s in the
-upgrades measured here.
+new release recalibrates once. Moving to the current build took the endpoint
+down for 70 s, and 1.7.0-m1, which also timed the chunk pair, for 287 s.
 Clients need no change.
 
 Then run `sudo sh scripts/verify.sh`. Besides the status codes, it asks a

@@ -40,9 +40,9 @@ Four facts shape every config:
   empty. OpenCode's config sets 32,768.
 - **The window `/v1/models` reports as `context_length`**, 262,144 tokens for
   the default model. If the server's differs, use its value and recompute the
-  limit derived from it, OpenCode's `input`. Sessions have reached 95K. If a
-  client fails near the limit, lower its window to 144,384, which OpenCode has
-  run with, and record it in [findings](findings.md).
+  limit derived from it, OpenCode's `input`. The server read prompts of 238.8K
+  tokens correctly ([findings](findings.md#prefill-as-a-pair-of-chunks)). If a
+  client fails near the limit, record it in [findings](findings.md).
 
 Any other client of the OpenAI API (chat completions or Responses) or of
 Anthropic's Messages API works with the key, the model ID and the base URL
