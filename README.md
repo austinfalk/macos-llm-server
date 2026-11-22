@@ -31,7 +31,7 @@ When you finish:
 |---|---|
 | Mac | Apple Silicon, macOS 26.4 or later, an administrator account |
 | Memory | 36 GB or more for the default model. With less, pick a smaller one before step 5 ([Models](#models)) |
-| Disk | Up to about 21 GB for the model and its draft, plus Splash's SSD cache, which it sizes itself up to 32 GiB |
+| Disk | 19 GB for the model and its draft, as measured here, plus Splash's SSD cache, which it sizes itself up to 32 GiB |
 | Software | [Homebrew](https://brew.sh) in `/opt/homebrew`, its default on Apple Silicon, and a [Tailscale](https://tailscale.com) account |
 | Time | Mostly the first download, about 19 GB, plus about 45 s to calibrate the Neural Engine |
 
