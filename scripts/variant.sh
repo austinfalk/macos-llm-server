@@ -12,7 +12,7 @@ variant_values() {
 	case $1 in
 		port)
 			# The installer keeps each version under SPLASH_HOME and points
-			# `current` and the splash-m1 command at the newest.
+			# `current` and the splash-m1 command at the version installed last.
 			SPLASH_VERSION=1.6.1-m1.1
 			SPLASH_INSTALLER_URL=https://github.com/paperniuk/splash/releases/download/$SPLASH_VERSION/install-m1.sh
 			SPLASH_INSTALLER_SHA256=89b1a1616bbbb4e5a6ec95f70f1a722f61baf00cf942e1e8c4cb0109665ddc4f

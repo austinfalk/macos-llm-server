@@ -31,7 +31,7 @@ When you finish:
 |---|---|
 | Mac | Apple Silicon, macOS 26.4 or later, an administrator account |
 | Memory | 36 GB or more for the default model. With less, pick a smaller one before step 5 ([Models](#models)) |
-| Disk | About 25 GB for the model and its draft, plus Splash's SSD cache, which it sizes itself up to 32 GiB |
+| Disk | Up to about 21 GB for the model and its draft, plus Splash's SSD cache, which it sizes itself up to 32 GiB |
 | Software | [Homebrew](https://brew.sh) in `/opt/homebrew`, its default on Apple Silicon, and a [Tailscale](https://tailscale.com) account |
 | Time | Mostly the first download, about 19 GB, plus about 45 s to calibrate the Neural Engine |
 
@@ -237,7 +237,7 @@ Set `LLM_MODEL` in `config.env` to what `--model` takes.
 | Mac memory | Model | Notes |
 |---|---|---|
 | 36 GB or more | `mlx-community/Qwen3.8-27B-4bit` (default) | Scores 34 on the Artificial Analysis Intelligence Index v4.3.2. 36 GB is the port's stated requirement *(sourced)*. Run here on 64 GB |
-| 36 GB or more, for speed | `mlx-community/Qwen3.6-35B-A3B-4bit` | 3B parameters active per token, so the port writes about twice as fast, but it scores 18 *(sourced)* |
+| 36 GB or more, for speed | `mlx-community/Qwen3.6-35B-A3B-4bit` | 3B parameters active per token, so the port writes about 2.5 times as fast, but it scores 18 *(sourced)* |
 | 24-32 GB | `unsloth/Qwen3.8-27B-GGUF:UD-IQ3_XXS`, or `unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q2_K_XL` | Splash measured both on a 24 GB Mac: the 27B at 43.5 tok/s with 53K tokens of context, the 35B-A3B at 145 tok/s with the full 256K. The port names the 27B for 24 GB *(sourced)*. Not run here |
 | Under 24 GB | None in this guide | The port runs Ternary Bonsai 2 on 16 GB after raising the GPU's memory limit at each boot, with `--language-only` *(sourced)*. The guide's LaunchAgent sets up neither |
 

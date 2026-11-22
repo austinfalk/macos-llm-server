@@ -64,7 +64,7 @@ and wait for a release.
   pinned by `SPLASH_VERSION` and `SPLASH_INSTALLER_SHA256`. `1-install.sh`
   refuses an installer whose SHA-256 differs. The installer keeps each version
   under `~/Library/Application Support/Splash-M1` and points `current` and the
-  command at the newest. Call Splash by path, `SPLASH_BIN`
+  command at the version installed last. Call Splash by path, `SPLASH_BIN`
   (`$(brew --prefix)/bin/splash` or `splash-m1`), never a version's folder. A
   new release is a deliberate bump of the build's values, never a side effect
   of `brew upgrade`.

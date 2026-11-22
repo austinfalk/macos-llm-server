@@ -22,7 +22,7 @@ two on some M1 and M2 chips (README, "How it works"):
   lists. Splash pairs it with `incoai/Qwen3.8-27B-DFlash2` by itself. The
   repository ID is the model ID clients use, because some clients reject a
   reply whose `model` differs from what they asked for *(sourced: Splash's
-  DEVELOPMENT.md, "API model aliases")*.
+  `docs/server.md`, "API model aliases")*.
 - `--allowed-host <machine>.<tailnet>.ts.net`. Without it, Splash answers 403
   to what `tailscale serve` passes on. The check ignores the port. With the
   flag, a Host with no port, `:443` or `:8443` got 200, and another name got
@@ -57,8 +57,9 @@ Anthropic's API does (`field_value(output_config, "effort", "high")` in
 `server/dialects/anthropic.py`, 1.6.1-m1.1 and 1.7.0-m1). The request then
 carries an effort, so `--default-reasoning-effort` does not apply, and Qwen's
 template renders `high` as `xhigh` (`REASONING_EFFORT_ALIASES` in
-`server/chat_templates.py`). This is read from the source, not measured. A
-Messages client has to ask for `medium` itself.
+`server/chat_templates.py`). This is read from the source and from Splash's
+`docs/api.md` and `docs/server.md`, not measured. A Messages client has to ask
+for `medium` itself.
 
 Splash 1.7 adds `--reasoning-effort`, which forces one effort on every
 request, and refuses it together with `--default-reasoning-effort`
@@ -69,13 +70,14 @@ lose it.
 
 The port runs part of each prefill layer's FFN on the Neural Engine, at a
 share it calibrates on a build's first start, 0.47 here. 1.6.1-m1.1 adds an
-opt-in mode. Given a share by hand, it reads each prefill command of 512 rows
+opt-in mode. Given a share by hand, it reads each prefill command of 256 rows
 or more as two chunks, with the Neural Engine on one chunk's FFN while the GPU
-runs the other's attention. Its notes say the mode pays off only at about 0.2
-above the calibrated share, and give 0.735 for an M1 Max, 0.88 for an M1 Pro
-and 0.53 for an M2 Max. They report +18-19% cold prefill on the 27B at 2.1K to
-16.7K tokens and -5% at 560, with logits as close to the GPU alone as the
-calibrated split (KL 0.00057 against 0.00050) *(sourced)*.
+runs the other's attention. Its notes run it with `--ane-ffn-minimum-rows 512`,
+say the mode pays off only at about 0.2 above the calibrated share, and give
+0.735 for an M1 Max, 0.88 for an M1 Pro and 0.53 for an M2 Max. They report
++18-19% cold prefill on the 27B at 2.1K to 16.7K tokens and -5% at 560, with
+logits as close to the GPU alone as the calibrated split (KL 0.00057 against
+0.00050) *(sourced)*.
 
 **Against the calibrated split** (2026-11-21). The calibrated split alone,
 with no pair, read cold prompts of this repository's files at 190 tok/s at 820
@@ -181,8 +183,9 @@ matched on 2026-11-21, and none was filed. **Changed:** the port is pinned at
 1.6.1-m1.1, and `verify.sh` asks the 3+3 follow-up and fails unless it answers
 6, because the status checks passed on the broken build.
 
-The port's open issue #63, decode slowing after about a day of uptime,
-applies to every version *(sourced)*.
+The port's open issue #63, decode slowing after about a day of uptime with
+"growth paused" in the log, is not fixed in 1.6.1-m1.1 or 1.7.0-m1
+*(sourced)*. It was reported with a MoE model, not this checkpoint.
 
 **Splash 1.7.0 is pinned for M3 and later**, as released. It has not run
 here, and whether the 1.7.0-m1 failure comes from Splash's code or the port's
@@ -223,18 +226,21 @@ requests after a start read slower (21.4 s against 13.5 s for 2.9K tokens).
 The second waited 6.5 s for the weights after an idle release, and shared the
 GPU with OpenCode's title request.
 
-The port measured this checkpoint on an M1 Max at 61.5 tok/s on a code prompt
-and 51.5 over six mixed prompts, and Qwen3.6-35B-A3B at 127 tok/s
-*(sourced)*. Writing is slower here because these prompts draft worse: 2.6-5.5
-tokens per draft cycle, median 3.35, against 6-7 on the port's code prompts
-*(sourced: port issue #11)*.
+The port's README for 1.6.1-m1.1 puts this checkpoint on an M1 Max at about
+61 tok/s on a code prompt and 46-60 across code and prose prompts. The port's
+1.5.0-m1 notes, the last to time Qwen3.6-35B-A3B, put it at 143.5 tok/s
+against 55.8 for this checkpoint *(sourced)*. Writing is slower here because
+these prompts draft worse: 2.6-5.5 tokens per draft cycle, median 3.35, against
+6-7 on the port's code prompts *(sourced: port issue #11)*.
 
 **Splash sends no tokens while it reads a prompt** (2026-11-21, 1.6.1-m1.1). A
 streamed chat completion with an uncached prompt got its headers and an empty
 first chunk in 0.06 s, then nothing until Splash had read the prompt: 17
-minutes for 127.6K tokens and 50 for 238.8K. A client's timeout between chunks
-has to cover the whole read, so the client guide raises OpenCode's
-`chunkTimeout` from 15 to 60 minutes.
+minutes for 127.6K tokens and 50 for 238.8K. Splash sends progress chunks
+during the read only to a streamed request that sets `"return_progress": true`
+*(sourced: Splash's `docs/api.md`, "Output limits and streaming")*. Without
+it, a client's timeout between chunks has to cover the whole read, so the
+client guide raises OpenCode's `chunkTimeout` from 15 to 60 minutes.
 
 **Idle release.** After 10 idle minutes Splash frees the weights, and the next
 request waits for them ("Weights restored in 6.47 s" in Splash's log on
@@ -266,11 +272,13 @@ are compared. What happens under longer sustained load is not measured.
 - Splash: https://github.com/incoai/splash, and 1.7.0's notes:
   https://github.com/incoai/splash/releases/tag/1.7.0
 - The M1/M2 port: https://github.com/paperniuk/splash, and the notes for
-  1.6.1-m1.1 and 1.7.0-m1:
+  1.5.0-m1, 1.6.1-m1.1 and 1.7.0-m1:
+  https://github.com/paperniuk/splash/releases/tag/1.5.0-m1,
   https://github.com/paperniuk/splash/releases/tag/1.6.1-m1.1,
   https://github.com/paperniuk/splash/releases/tag/1.7.0-m1
+- The port's README for 1.6.1-m1.1: https://github.com/paperniuk/splash/blob/1.6.1-m1.1/README.md
 - Port issue #11, decode cycles on M1 Max: https://github.com/paperniuk/splash/issues/11
-- Port issue #51, the 1.6.0-m1 hang: https://github.com/paperniuk/splash/issues/51
+- Port issue #63, decode slowing after a day: https://github.com/paperniuk/splash/issues/63
 - incoai/splash #292, `--idle-release off`: https://github.com/incoai/splash/issues/292
 - Splash on 24 GB Macs: https://github.com/incoai/splash/blob/1.7.0/docs/performance.md#smaller-ggufs-on-24-gb-macs
 - The port's models by Mac memory: https://github.com/paperniuk/splash#which-model-for-your-mac
