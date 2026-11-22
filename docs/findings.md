@@ -67,9 +67,9 @@ Anthropic's API does (`field_value(output_config, "effort", "high")`, in
 `server/dialects/anthropic.py` in 1.6.1-m1.1 and 1.7.0-m1). The request then carries an
 effort, so `--default-reasoning-effort` does not apply, and Qwen's template
 renders `high` as `xhigh` (`REASONING_EFFORT_ALIASES` in
-`server/chat_templates.py`). Read from the source, not measured. So
-`claude-local` asks for `medium` itself, and the server log showed
-`effort medium` for it.
+`server/chat_templates.py`). Read from the source, not measured. So a
+Messages client has to ask for `medium` itself. The guide's `claude-local`
+did, and the server log showed `effort medium` for it.
 
 Splash 1.7 adds `--reasoning-effort`, which forces one effort on every
 request, and refuses it together with `--default-reasoning-effort`
@@ -300,7 +300,7 @@ five minutes of them, waits `CLAUDE_STREAM_IDLE_TIMEOUT_MS` (5 min by default)
 for real output, then cancels and resends the request *(sourced)*, which
 starts the thinking again. That cancelled a turn at 600 s. With the timeout at
 30 minutes, two turns at 95K tokens of context thought for 794 and 843 s and
-finished. **Changed:** the client guide sets it.
+finished. **Changed:** the client guide set it while it covered Claude Code.
 
 **A long session.** One `claude-local -p --continue` documentation audit ran
 five prompts, growing to 74,875 tokens of context with nothing refused or
