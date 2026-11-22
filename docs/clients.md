@@ -382,9 +382,9 @@ only this model and never OpenCode's hosted free models:
 Why:
 
 - `limit` matches the port's launcher.
-- `agents`: OpenCode's docs do not say which model the hidden `title`, `summary` and
-  `compaction` agents use by default, so each is pinned. Build and plan use
-  the top-level `model`, and subagents use their session's model.
+- `agents`: OpenCode's docs do not say which model the hidden `title`,
+  `summary` and `compaction` agents use by default, so each is pinned. Build
+  and plan use the top-level `model`, and subagents use their session's model.
 - `capabilities.reasoning` gives the low, medium and high variants. With none
   chosen, the server's `medium` applies.
 - `chunkTimeout`: Splash sends headers at once and its first token when it has
