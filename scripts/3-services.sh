@@ -1,8 +1,8 @@
 #!/bin/sh
-# README step 5: serve the model with Splash, behind an API key, on the
+# README step 5: serve the model with mlx-serve, behind an API key, on the
 # tailnet.
-# Run as yourself: Splash runs in your login session, where macOS gives it the
-# GPU and the Neural Engine.
+# Run as yourself: mlx-serve runs in your login session, where macOS gives it
+# the GPU.
 #
 #     sh scripts/3-services.sh
 #
@@ -20,15 +20,15 @@ step "Prerequisites"
 case $LLM_HTTPS_PORT in
 	'' | *[!0-9]*) die "LLM_HTTPS_PORT is '$LLM_HTTPS_PORT', not a port number: fix it in config.env" ;;
 esac
-[ -x "$SPLASH_BIN" ] || die "Splash is not installed: run scripts/1-install.sh"
-version=$("$SPLASH_BIN" --version 2>/dev/null) || version=
-[ "$version" = "Splash $SPLASH_VERSION" ] || die "$SPLASH_BIN is '$version', not Splash $SPLASH_VERSION: run scripts/1-install.sh"
+[ -x "$MLX_SERVE_BIN" ] || die "mlx-serve is not installed: run scripts/1-install.sh"
+version=$(mlx_serve_version)
+[ "$version" = "$MLX_SERVE_BUILD" ] || die "$MLX_SERVE_BIN is '${version:-unknown}', not mlx-serve $MLX_SERVE_BUILD: run scripts/1-install.sh"
+[ -f "$LLM_MODEL_DIR/config.json" ] || die "$LLM_MODEL_ID is not converted: run scripts/1-install.sh"
 EP=$(endpoint_url) || EP=
 [ -n "$EP" ] || die "Tailscale is not up: run sudo sh scripts/2-tailscale.sh"
 tailscale status --json | plutil -extract CertDomains.0 raw -o - - >/dev/null 2>&1 \
 	|| die "HTTPS certificates are off for this tailnet: see scripts/2-tailscale.sh"
-ENDPOINT_HOST=$(endpoint_host)
-ok "$version; endpoint will be $EP"
+ok "mlx-serve $version; endpoint will be $EP"
 
 step "API key"
 new_key=no
@@ -44,36 +44,47 @@ chmod 600 "$KEY_FILE"
 key | grep -Eqx '[A-Za-z0-9]{32,}' \
 	|| die "$KEY_FILE does not hold a key of 32+ letters and digits. Delete it and re-run to make a new one."
 
+step "Generation defaults"
+# Inkling's chat template thinks at "high" when a request names no reasoning
+# effort, and clients such as OpenCode name none. This rule fills in "medium"
+# only where the request leaves the field out (docs/findings.md). mlx-serve
+# reads the file at each request, so a change needs no restart.
+mkdir -p "$(dirname "$MLX_SERVE_GEN_SETTINGS")"
+render generation-settings.json "$MLX_SERVE_GEN_SETTINGS" 600 "$LLM_USER:staff"
+ok "reasoning effort medium unless a request names one ($MLX_SERVE_GEN_SETTINGS)"
+
 step "Server"
-mkdir -p "$(dirname "$SPLASH_PLIST")" "$(dirname "$SPLASH_LOG")"
-new=$SPLASH_PLIST.new.$$
-render com.llmserver.splash.plist "$new" 600 "$LLM_USER:staff"
-# Splash reads the key once, at start, so a new key needs a restart too.
-if [ $new_key = no ] && [ -f "$SPLASH_PLIST" ] && cmp -s "$new" "$SPLASH_PLIST" && job_loaded "gui/$LLM_UID/$SPLASH_LABEL"; then
+mkdir -p "$(dirname "$MLX_SERVE_PLIST")" "$(dirname "$MLX_SERVE_LOG")"
+new=$MLX_SERVE_PLIST.new.$$
+render com.llmserver.mlx-serve.plist "$new" 600 "$LLM_USER:staff"
+# mlx-serve reads the key once, at start, so a new key needs a restart too.
+if [ $new_key = no ] && [ -f "$MLX_SERVE_PLIST" ] && cmp -s "$new" "$MLX_SERVE_PLIST" && job_loaded "gui/$LLM_UID/$MLX_SERVE_LABEL"; then
 	rm -f "$new"
 	ok "already running with these settings"
 else
-	if lsof -nP -iTCP:"$LLM_PORT" -sTCP:LISTEN >/dev/null 2>&1 && ! job_loaded "gui/$LLM_UID/$SPLASH_LABEL"; then
+	if lsof -nP -iTCP:"$LLM_PORT" -sTCP:LISTEN >/dev/null 2>&1 && ! job_loaded "gui/$LLM_UID/$MLX_SERVE_LABEL"; then
 		rm -f "$new"
 		die "something else listens on port $LLM_PORT: $(lsof -nP -iTCP:"$LLM_PORT" -sTCP:LISTEN | awk 'NR == 2 {print $1, "pid", $2}'). Stop it, then re-run this script."
 	fi
-	job_loaded "gui/$LLM_UID/$SPLASH_LABEL" && info "restarting with new settings: the endpoint is down until it is back"
-	mv -f "$new" "$SPLASH_PLIST"
-	start_job "gui/$LLM_UID" "$SPLASH_LABEL" "$SPLASH_PLIST" \
-		|| die "the server did not start, so the endpoint is down. Read $SPLASH_LOG, fix the cause, then re-run sh scripts/3-services.sh"
-	ok "started $SPLASH_LABEL"
+	job_loaded "gui/$LLM_UID/$MLX_SERVE_LABEL" && info "restarting with new settings: the endpoint is down until it is back"
+	mv -f "$new" "$MLX_SERVE_PLIST"
+	start_job "gui/$LLM_UID" "$MLX_SERVE_LABEL" "$MLX_SERVE_PLIST" \
+		|| die "the server did not start, so the endpoint is down. Read $MLX_SERVE_LOG, fix the cause, then re-run sh scripts/3-services.sh"
+	ok "started $MLX_SERVE_LABEL"
 fi
 
-info "waiting for the model (the first start downloads about 19 GB and calibrates)"
-runs() { launchctl print "gui/$LLM_UID/$SPLASH_LABEL" 2>/dev/null | awk '$1 == "runs" {print $3; exit}'; }
+info "waiting for the model to load"
+runs() { launchctl print "gui/$LLM_UID/$MLX_SERVE_LABEL" 2>/dev/null | awk '$1 == "runs" {print $3; exit}'; }
 runs0=$(runs)
 crash_looping() { [ "$(runs)" -ge $((${runs0:-1} + 2)) ]; }
+# /health needs no key. It answers 503 while the model loads and 200 once
+# mlx-serve can serve it.
 n=0
-until curl -s -o /dev/null -m 5 -w '%{http_code}' "http://127.0.0.1:$LLM_PORT/ready" 2>/dev/null | grep -qx 200; do
+until curl -s -o /dev/null -m 5 -w '%{http_code}' "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null | grep -qx 200; do
 	n=$((n + 1))
-	if [ $n -ge 720 ] || crash_looping || ! job_loaded "gui/$LLM_UID/$SPLASH_LABEL"; then
-		tail -15 "$SPLASH_LOG" 2>/dev/null | sed 's/^/        log: /'
-		die "the server did not come up, so the endpoint is down. Read $SPLASH_LOG, fix the cause, then re-run sh scripts/3-services.sh"
+	if [ $n -ge 120 ] || crash_looping || ! job_loaded "gui/$LLM_UID/$MLX_SERVE_LABEL"; then
+		tail -15 "$MLX_SERVE_LOG" 2>/dev/null | sed 's/^/        log: /'
+		die "the server did not come up, so the endpoint is down. Read $MLX_SERVE_LOG, fix the cause, then re-run sh scripts/3-services.sh"
 	fi
 	sleep 5
 done
@@ -97,14 +108,16 @@ for url in $(serve_urls_to "http://127.0.0.1:$LLM_PORT"); do
 done
 
 step "Checking"
+# tailscale serve connects from loopback, which mlx-serve exempts from the key
+# unless --api-key-strict is on. The 401 shows that it is.
 code=$(http_code "$EP/v1/models" "$(key)")
 unauth=$(http_code "$EP/v1/models")
 if [ "$code" = 200 ]; then ok "with the key    -> 200"; else bad "with the key    -> $code (want 200)"; fi
 if [ "$unauth" = 401 ]; then ok "without the key -> 401"; else bad "without the key -> $unauth (want 401)"; fi
 [ "$code" = 200 ] && [ "$unauth" = 401 ] \
-	|| die "the endpoint is not healthy. See: $SPLASH_LOG"
+	|| die "the endpoint is not healthy. See: $MLX_SERVE_LOG"
 
-printf '\nEndpoint: %s/v1   model: %s\nKey:      %s\n\nNext:\n' "$EP" "$LLM_MODEL" "$KEY_FILE"
+printf '\nEndpoint: %s/v1   model: %s\nKey:      %s\n\nNext:\n' "$EP" "$LLM_MODEL_ID" "$KEY_FILE"
 if [ -f /etc/ssh/sshd_config.d/200-llm-server.conf ] || launchctl print "system/$L_PF" >/dev/null 2>&1; then
 	printf '    sudo sh scripts/verify.sh\n'
 else

@@ -1,8 +1,8 @@
 # Connecting a client
 
 How to use the server from another Linux or macOS machine with OpenCode.
-Follow the steps in order, running each check before the next. Last followed
-on 2026-11-21 with OpenCode 2.3.2, on a Linux client and on the server.
+Follow the steps in order, running each check before the next. Written for
+OpenCode 2.3.2, and not yet followed against mlx-serve.
 
 **If you are an agent following this:** do one step at a time and run its
 check. If a check fails, or a command, flag or config key does not exist in
@@ -24,47 +24,44 @@ Below, `ENDPOINT` is the `Endpoint` line `3-services.sh` printed on the
 server, without the trailing `/v1`: `https://<machine>.<tailnet>.ts.net`, or
 `https://<machine>.<tailnet>.ts.net:8443` when the server sets
 `LLM_HTTPS_PORT`. Use the full name, not the short one `tailscale status`
-shows, or TLS and Splash's host check fail. Replace `ENDPOINT` in the config
-below. In shell commands, set it once with `export ENDPOINT=https://...`.
+shows, or TLS fails. Replace `ENDPOINT` in the config below. In shell
+commands, set it once with `export ENDPOINT=https://...`.
 
 Four facts shape every config:
 
 - **One model ID** for every model setting, helpers and subagents included:
   the `Model` line `3-services.sh` printed. The config below uses the default,
-  `mlx-community/Qwen3.8-27B-4bit`. If the server's differs, replace it
-  everywhere. Splash answers any other name with 404.
-- **No sampling settings.** Splash applies Qwen's defaults when a request sets
-  none.
+  `Inkling-2-Mini-Uncensored-q4attn`. If the server's differs, replace it everywhere.
+  mlx-serve answers a name it does not know with its one model instead of an
+  error, so a wrong ID goes unnoticed.
+- **No sampling settings.** mlx-serve applies the model's own defaults when a
+  request sets none.
 - **About 32K output tokens and long timeouts.** The model thinks first, the
   limit counts the thinking, and a reply cut off while thinking comes back
   empty. OpenCode's config sets 32,768.
-- **The window `/v1/models` reports as `context_length`**, 262,144 tokens for
-  the default model. If the server's differs, use its value and recompute the
-  limit derived from it, OpenCode's `input`. The server read prompts of 238.8K
-  tokens correctly ([findings](findings.md#prefill-as-a-pair-of-chunks)). If a
-  client fails near the limit, record it in [findings](findings.md).
+- **A window of 262,144 tokens.** The server pins it, below the model's own
+  1,048,576 tokens, and reports it in `/v1/models` as `context_length`.
 
 Any other client of the OpenAI API (chat completions or Responses) or of
 Anthropic's Messages API works with the key, the model ID and the base URL
 `ENDPOINT/v1`. Give a Messages client the base URL `ENDPOINT` instead,
-because it adds `/v1` itself.
+because it adds `/v1` itself. mlx-serve also speaks Ollama's API at
+`ENDPOINT`.
 
-**Working with it.** The first turn is slow. On the M1 Max the server reads a
-new prompt at about 4-5 s per thousand tokens up to 34K tokens, and an agent's
-first prompt is 8-20K tokens, so expect 35-95 s. Follow-ups
-start in about a second because the server
-caches the conversation, longer when a tool result adds a lot of text. A new
-session, a changed system prompt or tool set, or an edit to an earlier message
-makes it read again from that point, so keep sessions going and turn off MCP
-servers a session does not need. Requests share the GPU, so run one agent at a
-time.
+**Working with it.** The first turn is slow. The M1 Max reads a prompt at
+about 420 tokens a second, and an agent's first prompt is 8-20K tokens, so
+expect 20-50 s there. Follow-ups start sooner,
+because the server caches the conversation so far. A new session, a changed
+system prompt or tool set, or an edit to an earlier message makes it read
+the prompt again, from the start when the change is more than about 2,000
+tokens back ([findings](findings.md#what-mlx-serves-notes-say-about-this-model)).
+So keep sessions going and turn off MCP servers a session does not need. Requests share the GPU, so run one agent at a time.
 
-**Reasoning effort.** The server gives `medium` to chat completions and
-Responses requests that name none, so OpenCode needs no setting. Messages
-requests with no effort get `high`, which Qwen's template renders as `xhigh`
-([findings](findings.md#reasoning-effort)). Set `medium` in a Messages
-client. For `high` on one OpenCode task, press **Ctrl+T** in the TUI, or run
-`opencode run --model tailnet/mlx-community/Qwen3.8-27B-4bit#high`.
+**Reasoning effort.** The server gives `medium` to requests that name no
+effort, so OpenCode needs no setting. Without that rule, Inkling's template
+thinks at `high` ([findings](findings.md#reasoning-effort)). For `high` on one
+OpenCode task, press **Ctrl+T** in the TUI, or run
+`opencode run --model tailnet/Inkling-2-Mini-Uncensored-q4attn#high`.
 
 ## 1. Tailscale
 
@@ -114,11 +111,12 @@ read.
 
 ```sh
 printf 'header = "Authorization: Bearer %s"\n' "$(cat ~/.config/llm-server/api-key)" \
-  | curl -sf -K - "$ENDPOINT/v1/models" | grep -o '"id": *"[^"]*"'
+  | curl -sf -K - "$ENDPOINT/v1/models" | grep -o -E '"(id|context_length)": *("[^"]*"|[0-9]+)' | head -2
 curl -s -o /dev/null -w '%{http_code}\n' "$ENDPOINT/v1/models"
 ```
 
-The first prints `"id": "mlx-community/Qwen3.8-27B-4bit"`, the second `401`.
+The first prints `"id":"Inkling-2-Mini-Uncensored-q4attn"` and
+`"context_length":262144`, the second `401`.
 
 ## 3. OpenCode
 
@@ -128,7 +126,7 @@ Install OpenCode 2 from [its docs](https://opencode.ai/docs).
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "tailnet/mlx-community/Qwen3.8-27B-4bit",
+  "model": "tailnet/Inkling-2-Mini-Uncensored-q4attn",
   "providers": {
     "tailnet": {
       "name": "LLM server",
@@ -139,8 +137,8 @@ Install OpenCode 2 from [its docs](https://opencode.ai/docs).
         "chunkTimeout": 3600000
       },
       "models": {
-        "mlx-community/Qwen3.8-27B-4bit": {
-          "name": "Qwen3.8 27B",
+        "Inkling-2-Mini-Uncensored-q4attn": {
+          "name": "Inkling 2 Mini Uncensored",
           "capabilities": {
             "reasoning": {"supported": true, "effort": ["low", "medium", "high"]}
           },
@@ -150,9 +148,9 @@ Install OpenCode 2 from [its docs](https://opencode.ai/docs).
     }
   },
   "agents": {
-    "title": {"model": "tailnet/mlx-community/Qwen3.8-27B-4bit"},
-    "summary": {"model": "tailnet/mlx-community/Qwen3.8-27B-4bit"},
-    "compaction": {"model": "tailnet/mlx-community/Qwen3.8-27B-4bit"}
+    "title": {"model": "tailnet/Inkling-2-Mini-Uncensored-q4attn"},
+    "summary": {"model": "tailnet/Inkling-2-Mini-Uncensored-q4attn"},
+    "compaction": {"model": "tailnet/Inkling-2-Mini-Uncensored-q4attn"}
   },
   "permissions": [
     {"action": "edit", "resource": "*", "effect": "ask"},
@@ -177,11 +175,12 @@ If a package manager installed OpenCode (Homebrew, mise), add
 `"update": "disable"`, so OpenCode leaves updates to it.
 
 On the server itself, use the provider ID `local` instead of `tailnet`,
-everywhere it appears, and set `baseURL` to `http://127.0.0.1:8000/v1`. Keep
-both `name` values. OpenCode then shows the model as `Qwen3.8 27B` and the
-provider as `LLM server` on every machine, including in a remote session on
-the server. Also add these `policies`, so that the server's OpenCode offers
-only this model and never OpenCode's hosted free models:
+everywhere it appears, and set `baseURL` to `http://127.0.0.1:8000/v1`. The
+server asks for the key from this Mac too. Keep both `name` values. OpenCode
+then shows the model as `Inkling 2 Mini Uncensored` and the provider as `LLM server` on
+every machine, including in a remote session on the server. Also add these
+`policies`, so that the server's OpenCode offers only this model and never
+OpenCode's hosted free models:
 
 ```json
 "policies": [
@@ -192,16 +191,22 @@ only this model and never OpenCode's hosted free models:
 
 Why:
 
-- `limit` matches the port's launcher.
+- `limit`: `context` is the server's window, and `input` is that window less
+  the output limit. The output limit
+  counts thinking, and mlx-serve keeps no room for the answer, so a reply cut
+  off while thinking comes back empty (mlx-serve's
+  [reasoning notes](https://github.com/ddalcu/mlx-serve/blob/v26.11.4-pre-release.1/docs/reasoning-protocols.md)).
+  32,768 leaves room for both.
 - `agents`: OpenCode's docs do not say which model the hidden `title`,
   `summary` and `compaction` agents use by default, so each is pinned. Build
   and plan use the top-level `model`, and subagents use their session's model.
 - `capabilities.reasoning` gives the low, medium and high variants. With none
   chosen, the server's `medium` applies.
-- `chunkTimeout`: Splash sends headers at once and its first token when it has
-  read the prompt, 17 minutes for 128K tokens and 50 for 239K. OpenCode's
-  default of 15 minutes between chunks drops a cold prompt longer than about
-  110K tokens. 60 minutes covers the `input` limit.
+- `chunkTimeout`: by default OpenCode gives up on a stream after 15 minutes
+  without a chunk. A cold prompt near the limit takes longer than that to
+  read: about 20 minutes on the M1 Max. mlx-serve
+  sends a keepalive on a silent stream every 5 s, but whether OpenCode counts
+  one as a chunk is not checked, so the timeout is 60 minutes.
 - `permissions`: by default OpenCode edits files, runs commands, fetches URLs,
   searches the web and reads outside the project without asking. These rules
   ask, except for a few read-only commands. The last matching rule wins, so
@@ -212,7 +217,7 @@ Why:
 ```sh
 opencode run --standalone "Reply with the single word OK."
 opencode run --standalone -c "Now reply with the single word YES."
-opencode models --standalone | grep '^tailnet/'    # tailnet/mlx-community/Qwen3.8-27B-4bit
+opencode models --standalone | grep '^tailnet/'    # tailnet/Inkling-2-Mini-Uncensored-q4attn
 ```
 
 Without `--standalone`, these commands use a background `opencode serve`,
@@ -227,11 +232,11 @@ even after an error, so read its output.
 2. Ask the user to run this on the server:
 
    ```sh
-   grep Started ~/Library/Logs/llm-server/splash.log | tail -20
+   grep 'POST /v1/' ~/Library/Logs/llm-server/mlx-serve.log | tail -20
    ```
 
-   OpenCode's turns show `effort absent → medium` (or `medium`), and its
-   titles may show `low`. A `high` or `xhigh` nobody asked for is a failure.
+   Each OpenCode turn shows a `POST /v1/chat/completions` line. An error after
+   one of them is a failure.
 
 **When re-testing for `docs/findings.md`:** also work on a real task in one
 OpenCode session until its context passes 64K tokens. Note

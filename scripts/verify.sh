@@ -53,54 +53,49 @@ else
 	fail "$P_TAILSCALED is not this repo's, which restarts tailscaled if it exits (re-run scripts/2-tailscale.sh)"
 fi
 
-step "Splash"
-if job_loaded "gui/$LLM_UID/$SPLASH_LABEL"; then
-	pass "server $SPLASH_LABEL loaded in $LLM_USER's login session"
+step "mlx-serve"
+if job_loaded "gui/$LLM_UID/$MLX_SERVE_LABEL"; then
+	pass "server $MLX_SERVE_LABEL loaded in $LLM_USER's login session"
 elif [ "$(stat -f %Su /dev/console)" != "$LLM_USER" ]; then
-	fail "server $SPLASH_LABEL is not running: $LLM_USER is not logged in. Log in (over Screen Sharing), then re-run"
+	fail "server $MLX_SERVE_LABEL is not running: $LLM_USER is not logged in. Log in (over Screen Sharing), then re-run"
 else
-	fail "server $SPLASH_LABEL is not loaded (re-run scripts/3-services.sh)"
+	fail "server $MLX_SERVE_LABEL is not loaded (re-run scripts/3-services.sh)"
 fi
-if [ -z "$SPLASH_VARIANT" ]; then
-	fail "no Splash build runs on ${CPU_BRAND:-this chip}: see scripts/1-install.sh"
+expect "mlx-serve build" "$(mlx_serve_version)" "$MLX_SERVE_BUILD"
+# The LaunchAgent's shell execs mlx-serve, so launchd's pid is the server's.
+pid=$(launchctl print "gui/$LLM_UID/$MLX_SERVE_LABEL" 2>/dev/null | awk '$1 == "pid" {print $3; exit}')
+if [ -z "$pid" ]; then
+	fail "no mlx-serve process"
 else
-	expect "Splash version ($SPLASH_VARIANT)" "$(sudo -u "$LLM_USER" "$SPLASH_BIN" --version 2>/dev/null)" "Splash $SPLASH_VERSION"
-	if [ "$SPLASH_VARIANT" = upstream ]; then
-		# Homebrew refuses root, and needs its user's home.
-		if sudo -H -u "$LLM_USER" "$BREW_PREFIX/bin/brew" list --pinned 2>/dev/null | grep -qx splash; then
-			pass "splash pinned in Homebrew"
-		else
-			fail "splash is not pinned in Homebrew, so brew upgrade would move it: run brew pin splash"
-		fi
-	fi
-	# The HTTP server and the engine it starts both run from SPLASH_RUN_DIR.
-	# ps may show it resolved: Homebrew's opt/splash links into the Cellar.
-	run_real=$(cd "$SPLASH_RUN_DIR" 2>/dev/null && pwd -P) || run_real=$SPLASH_RUN_DIR
-	users=$(ps -axo user=,command= | awk -v a="$SPLASH_RUN_DIR/" -v b="$run_real/" '(index($0, a) || index($0, b)) && !/awk/ {print $1}' | sort -u)
-	if [ -z "$users" ]; then
-		fail "no Splash process"
-	elif [ "$users" != "$LLM_USER" ]; then
-		fail "Splash runs as $(printf '%s' "$users" | tr '\n' ' '), not only $LLM_USER"
-	else
-		pass "Splash runs as $LLM_USER, not root"
-	fi
+	expect "mlx-serve runs as" "$(ps -o user= -p "$pid")" "$LLM_USER"
 fi
 expect "key file permissions" "$(stat -f %Sp:%Su "$KEY_FILE" 2>/dev/null)" "-rw-------:$LLM_USER"
+if cmp -s "$LLM_REPO/config/generation-settings.json" "$MLX_SERVE_GEN_SETTINGS"; then
+	pass "reasoning effort medium unless a request names one ($MLX_SERVE_GEN_SETTINGS)"
+else
+	fail "$MLX_SERVE_GEN_SETTINGS is not this repo's, so requests that name no effort think at high (re-run scripts/3-services.sh)"
+fi
 
 step "Nothing listens beyond loopback"
-addrs=$(lsof -nP -iTCP:"$LLM_PORT" -sTCP:LISTEN 2>/dev/null | awk 'NR > 1 {print $9}' | sort -u)
+# Every socket mlx-serve listens on, since by default it listens on every
+# interface.
+addrs=$([ -z "$pid" ] || lsof -nP -a -p "$pid" -iTCP -sTCP:LISTEN 2>/dev/null | awk 'NR > 1 {print $9}' | sort -u)
 shown=$(printf '%s' "$addrs" | tr '\n' ' ')
 if [ -z "$addrs" ]; then
-	fail "nothing is listening on port $LLM_PORT"
+	fail "mlx-serve is not listening"
 elif printf '%s\n' "$addrs" | grep -qvE '^(127\.0\.0\.1|\[::1\]):'; then
-	fail "port $LLM_PORT is exposed beyond loopback: $shown"
+	fail "mlx-serve listens beyond loopback: $shown"
+elif ! printf '%s\n' "$addrs" | grep -qx "127.0.0.1:$LLM_PORT"; then
+	fail "mlx-serve does not listen on 127.0.0.1:$LLM_PORT, where tailscale serve sends requests: $shown"
 else
-	pass "port $LLM_PORT: $shown"
+	pass "mlx-serve listens on $shown"
 fi
 
 step "Endpoint"
 code_hdr() { curl_hdr "$1" -s -o /dev/null -m 20 -w '%{http_code}' "$2"; }
 expect "with the key" "$(http_code "$EP/v1/models" "$KEY")" 200
+# tailscale serve connects from loopback, which mlx-serve lets in without the
+# key unless --api-key-strict is on.
 expect "without a key" "$(http_code "$EP/v1/models")" 401
 expect "with a wrong key" "$(http_code "$EP/v1/models" wrong-key)" 401
 expect "with the key as X-Api-Key" "$(code_hdr "X-Api-Key: $KEY" "$EP/v1/models")" 200
@@ -108,14 +103,14 @@ expect "with a wrong X-Api-Key" "$(code_hdr "X-Api-Key: wrong-key" "$EP/v1/model
 # "Name;" is curl for an empty header; "Name:" would not send it at all.
 expect "with an empty X-Api-Key" "$(code_hdr "X-Api-Key;" "$EP/v1/models")" 401
 expect "metrics without a key" "$(http_code "$EP/metrics")" 401
-# With keys configured, /health stays open but says nothing else.
+# /health stays open without the key, and says nothing else.
 expect "health without a key" "$(curl -s -m 10 "$EP/health")" '{"status":"ok"}'
 expect "model ID clients see" \
-	"$(curl_hdr "Authorization: Bearer $KEY" -s -m 20 "$EP/v1/models" | plutil -extract data.0.id raw -o - - 2>/dev/null)" "$LLM_MODEL"
-# A build can answer 200 and still write nonsense: 1.7.0-m1 failed this
-# follow-up every time (docs/findings.md).
+	"$(curl_hdr "Authorization: Bearer $KEY" -s -m 20 "$EP/v1/models" | plutil -extract data.0.id raw -o - - 2>/dev/null)" "$LLM_MODEL_ID"
+# A build can answer 200 and still write nonsense, so ask a follow-up whose
+# answer is known.
 answer=$(curl_hdr "Authorization: Bearer $KEY" -s -m 120 -H 'Content-Type: application/json' \
-	-d "{\"model\":\"$LLM_MODEL\",\"max_tokens\":2048,\"messages\":[{\"role\":\"user\",\"content\":\"What is 2+2?\"},{\"role\":\"assistant\",\"content\":\"4\"},{\"role\":\"user\",\"content\":\"And 3+3? Digits only.\"}]}" \
+	-d "{\"model\":\"$LLM_MODEL_ID\",\"max_tokens\":2048,\"messages\":[{\"role\":\"user\",\"content\":\"What is 2+2?\"},{\"role\":\"assistant\",\"content\":\"4\"},{\"role\":\"user\",\"content\":\"And 3+3? Digits only.\"}]}" \
 	"$EP/v1/chat/completions" | plutil -extract choices.0.message.content raw -o - - 2>/dev/null)
 expect "a follow-up's answer" "$(printf '%s' "$answer" | tr -d '[:space:].')" 6
 

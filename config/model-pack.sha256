@@ -1,0 +1,7 @@
+# The pack scripts/1-install.sh converts, as measured in docs/findings.md: SHA-256 and path.
+# The converter is deterministic, so a pack that differs was not converted as pinned.
+c35bfeb2b9f397c834271376ec68497ffd42a85455e755cac7ac236e481cb774 model-00001-of-00004.safetensors
+3138773ee5e64d9a16344afa3f8e0208b48e2b567808a721a744bc2151b40a65 model-00002-of-00004.safetensors
+b44b461a65bcb175a261c1022891a5e40620692b0a4c2199173fdb3ed664ca9f model-00003-of-00004.safetensors
+4addc269ad1d90c0846904cbad2fc52d7e4476c1715f69257db38b2a283612f2 model-00004-of-00004.safetensors
+7c3b651317f01f73bcf4e1dceba66ef8b7e1a1eac6bc171e882e690a4b10a1d2 mtp.safetensors

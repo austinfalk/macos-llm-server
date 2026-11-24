@@ -1,0 +1,2196 @@
+diff --git a/src/host/chat/reasoning/think_tags.zig b/src/host/chat/reasoning/think_tags.zig
+index bac86b5..dfe7f99 100644
+--- a/src/host/chat/reasoning/think_tags.zig
++++ b/src/host/chat/reasoning/think_tags.zig
+@@ -156,7 +156,8 @@ fn thinkCloseIsToolCallPayload(text: []const u8, pos: usize) bool {
+ 
+ /// Length of the trailing bytes of `buf` that could still GROW into a think
+ /// close tag with more streamed bytes — either family: `</think>`, the
+-/// Hy3-suffixed `</think:opensource>`, or Gemma's `<channel|>`. Streaming
++/// Hy3-suffixed `</think:opensource>`, Gemma's `<channel|>`, or Inkling's
++/// `<|end_message|>`. Streaming
+ /// reasoning flushes must hold this suffix back: flushing half a close tag
+ /// splits it across the flush boundary, so the retained remainder never
+ /// matches and the stream stays "inside thinking" forever (tag bytes leak
+@@ -171,6 +172,7 @@ pub fn partialThinkCloseSuffixLen(buf: []const u8) usize {
+         const tail = buf[i..];
+         if (isPartialSuffixedTag(tail, "</think")) return tail.len;
+         if (tail.len < "<channel|>".len and std.mem.startsWith(u8, "<channel|>", tail)) return tail.len;
++        if (tail.len < "<|end_message|>".len and std.mem.startsWith(u8, "<|end_message|>", tail)) return tail.len;
+     }
+     return 0;
+ }
+@@ -234,10 +236,11 @@ pub const ThinkSplit = struct {
+ 
+ /// A think block the MODEL opens when the template did not: a bare `<think>` token, or
+ /// Gemma 4's TWO tokens, the `<|channel>` marker (dropped from visible deltas) then the
+-/// word `thought`. `channel_armed` = the previous delta was that marker and nothing visible
++/// word `thought`, or Inkling's `<|content_thinking|>`. `channel_armed` = the previous delta was that marker and nothing visible
+ /// has been emitted. Returns the opener to seed `think_buf` with.
+ pub fn modelThinkOpener(channel_armed: bool, token_text: []const u8) ?[]const u8 {
+     if (std.mem.eql(u8, std.mem.trimEnd(u8, token_text, "\n"), "<think>")) return "<think>";
++    if (std.mem.eql(u8, std.mem.trimEnd(u8, token_text, "\n"), "<|content_thinking|>")) return "<|content_thinking|>";
+     if (channel_armed and std.mem.eql(u8, token_text, "thought")) return "<|channel>thought";
+     return null;
+ }
+@@ -435,6 +438,53 @@ test "a model-opened think block latches from its own opener token" {
+     try std.testing.expect(modelThinkOpener(false, "<think>x") == null);
+ }
+ 
++test "Inkling model-opened reasoning is latched before channel-marker filtering" {
++    try testing.expectEqualStrings("<|content_thinking|>", modelThinkOpener(false, "<|content_thinking|>").?);
++    try testing.expectEqualStrings("<|content_thinking|>", modelThinkOpener(false, "<|content_thinking|>\n").?);
++    for ([_][]const u8{ "<|content_text|>", "<|end_message|>", "<|message_model|>", "<|content_thinking|>prose" }) |text| {
++        try testing.expect(modelThinkOpener(false, text) == null);
++    }
++}
++
++test "Inkling close survives every split boundary before final content" {
++    const close = "<|end_message|>";
++    const reason = "private analysis";
++    const final = "<|message_model|><|content_text|>Public answer<|end_message|>";
++    for (1..close.len) |cut| {
++        const first = try std.mem.concat(testing.allocator, u8, &.{ reason, close[0..cut] });
++        defer testing.allocator.free(first);
++        const held = partialThinkCloseSuffixLen(first);
++        try testing.expectEqual(cut, held);
++        const emitted = first[0 .. first.len - held];
++        try testing.expectEqualStrings(reason, emitted);
++        // The real flush path keeps only this suffix, then appends the next chunk.
++        const pending = try std.mem.concat(testing.allocator, u8, &.{ first[first.len - held ..], close[cut..], final });
++        defer testing.allocator.free(pending);
++        try testing.expectEqual(@as(usize, 0), std.mem.indexOf(u8, pending, close).?);
++        // Compare the flushed+retained bytes with the dedicated full-message parser.
++        const complete = try std.mem.concat(testing.allocator, u8, &.{ modelThinkOpener(false, "<|content_thinking|>").?, emitted, pending });
++        defer testing.allocator.free(complete);
++        const parsed = splitThinkBlock(complete, true, false);
++        try testing.expectEqualStrings(reason, parsed.reasoning_content.?);
++        try testing.expectEqualStrings("Public answer", parsed.content);
++    }
++    try testing.expectEqual(@as(usize, 0), partialThinkCloseSuffixLen(close));
++    try testing.expectEqual(@as(usize, 0), partialThinkCloseSuffixLen("ordinary reasoning"));
++}
++
++test "Inkling EOS keeps an unclosed thought in reasoning and direct answers in content" {
++    const streamTailIsReasoning = @import("stream_gate.zig").streamTailIsReasoning;
++    const saw_opener = modelThinkOpener(false, "<|content_thinking|>") != null;
++    // prompt_opened=false reproduces the native streaming regression.
++    try testing.expect(streamTailIsReasoning(true, false, saw_opener));
++    const truncated = splitThinkBlock("<|content_thinking|>private analysis", true, false);
++    try testing.expectEqualStrings("private analysis", truncated.reasoning_content.?);
++    try testing.expectEqualStrings("", truncated.content);
++    const direct = splitThinkBlock("<|content_text|>Public answer<|end_message|>", true, false);
++    try testing.expect(direct.reasoning_content == null);
++    try testing.expectEqualStrings("Public answer", direct.content);
++}
++
+ test "K2-Horizon: the rendered prompt opens one of three think tags; thinking-off closes the SAME one" {
+     try testing.expect(promptTailOpensThink("<|ifm|im_start|>assistant\n<ifm|think>\n"));
+     try testing.expect(promptTailOpensThink("<|ifm|im_start|>assistant\n<ifm|think_fast>\n"));
+diff --git a/src/plugins/inkling2/contract.zig b/src/plugins/inkling2/contract.zig
+index 3ff6ee7..b990640 100644
+--- a/src/plugins/inkling2/contract.zig
++++ b/src/plugins/inkling2/contract.zig
+@@ -613,7 +613,7 @@ const Act = struct {
+         var g = ops.Graph.init(self.rig.a, self.rig.stream());
+         defer g.deinit();
+         const x = self.args;
+-        return self.rig.bytesOf(&.{try kernels.activation(&g, x[0], x[1], x[2], x[3], scaled(self.shape))});
++        return self.rig.bytesOf(&.{try kernels.activation(&g, x[0], x[1], x[2], x[3], scaled(self.shape), ops.dtype(x[0]))});
+     }
+ };
+ 
+@@ -823,7 +823,7 @@ const Sum = struct {
+         var g = ops.Graph.init(self.rig.a, self.rig.stream());
+         defer g.deinit();
+         const x = self.args;
+-        const o = try kernels.pickSum(&g, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], PICKS, scaled(self.shape));
++        const o = try kernels.pickSum(&g, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], PICKS, scaled(self.shape), ops.dtype(x[0]));
+         return self.rig.bytesOf(&o);
+     }
+ };
+diff --git a/src/plugins/inkling2/draft.zig b/src/plugins/inkling2/draft.zig
+index 0b5a8af..1b296d3 100644
+--- a/src/plugins/inkling2/draft.zig
++++ b/src/plugins/inkling2/draft.zig
+@@ -80,10 +80,20 @@ pub const Drafter = struct {
+     rnn_bias: Array = .{},
+     rnn_norm: Array = .{},
+     fold: Array = .{},
++    /// Per-row f32 scales `[rank]` when `fold` is symmetric INT8; null when `fold` is half.
++    fold_scale: ?Array = null,
+     fold_bias: Array = .{},
++    /// Cap on drafted tokens per round (0 = full cfg.block - 1).
++    max_steps: u32 = 0,
++
++    pub fn load(ctx: *const abi.LoadCtx, cfg: config.Draft, hidden: u32, head: *const Linear, s: mlx.mlx_stream) !?*Drafter {
++        return loadOpt(ctx, cfg, hidden, head, s, false);
++    }
+ 
+     /// The drafter beside the pack, its Markov head folded over the trunk's `head`; null when the pack ships none.
+-    pub fn load(ctx: *const abi.LoadCtx, cfg: config.Draft, hidden: u32, head: *const Linear, s: mlx.mlx_stream) !?*Drafter {
++    /// When `use_f16` (M1/M2), casts weights to FP16 and optionally quantizes the 3 drafter transformer layers' dense
++    /// projections to 4-bit (or 8-bit via INKLING_DRAFT_BITS) affine for 3.5x less drafter memory traffic.
++    pub fn loadOpt(ctx: *const abi.LoadCtx, cfg: config.Draft, hidden: u32, head: *const Linear, s: mlx.mlx_stream, use_f16: bool) !?*Drafter {
+         if (!ctx.dir.exists(ctx.dir.ctx, abi.Str.of(config.draft_file))) return null;
+         var w = try reader.headWeights(ctx, &.{config.draft_file}, "fuse_weight", "\x00");
+         defer w.deinit();
+@@ -94,7 +104,27 @@ pub const Drafter = struct {
+         errdefer d.release();
+         var g = Graph.init(gpa, s);
+         defer g.deinit();
+-        var at: At = .{ .d = d, .w = &w, .g = &g };
++        const qbits: u32 = blk: {
++            if (!use_f16) break :blk 16;
++            if (std.c.getenv("INKLING_DRAFT_BITS")) |raw| {
++                const sp = std.mem.span(raw);
++                if (std.mem.eql(u8, sp, "4")) break :blk 4;
++                if (std.mem.eql(u8, sp, "6")) break :blk 6;
++                if (std.mem.eql(u8, sp, "8")) break :blk 8;
++                if (std.mem.eql(u8, sp, "16")) break :blk 16;
++            }
++            break :blk 8;
++        };
++        if (use_f16) {
++            if (std.c.getenv("INKLING_DRAFT_MAX")) |raw| {
++                const v = std.fmt.parseInt(u32, std.mem.span(raw), 10) catch (cfg.block - 1);
++                d.max_steps = @min(v, cfg.block - 1);
++            } else {
++                d.max_steps = cfg.block - 1;
++            }
++            @import("../../sdk/util/log.zig").info("[inkling2-draft] M1/M2 FP16 drafter loaded: layer_bits={d} max_steps={d} fold_q8={}\n", .{ qbits, d.max_steps, std.c.getenv("INKLING_NO_FOLD_Q8") == null });
++        }
++        var at: At = .{ .d = d, .w = &w, .g = &g, .use_f16 = use_f16, .layer_bits = qbits };
+ 
+         if (cfg.layers > max_layers) return error.Inkling2DraftGeometry;
+         d.layers = try gpa.alloc(Layer, cfg.layers);
+@@ -133,9 +163,25 @@ pub const Drafter = struct {
+         const rank: c_int = @intCast(cfg.rank);
+         if (ops.shape(d.prev_rows)[1] != rank or ops.shape(d.rnn.w)[0] != 3 * rank) return error.Inkling2DraftGeometry;
+         // `head(hidden_out(latent))` = latent over `head(hidden_out's columns)` plus `head(hidden_out's bias)`.
+-        const out_w = try at.raw("markov_head.hidden_out.weight");
+-        const out_b = try at.raw("markov_head.hidden_out.bias");
+-        d.fold = try at.keep(try g.reshape(try project(&g, head, try g.reshape(try g.transpose(out_w, &.{ 1, 0 }), &.{ 1, rank, @intCast(hidden) })), &.{ rank, -1 }));
++        var out_w = try at.raw("markov_head.hidden_out.weight");
++        var out_b = try at.raw("markov_head.hidden_out.bias");
++        if (use_f16) {
++            out_w = try g.astype(out_w, .float16);
++            out_b = try g.astype(out_b, .float16);
++        }
++        const fold_raw = try g.reshape(try project(&g, head, try g.reshape(try g.transpose(out_w, &.{ 1, 0 }), &.{ 1, rank, @intCast(hidden) })), &.{ rank, -1 });
++        if (use_f16 and std.c.getenv("INKLING_NO_FOLD_Q8") == null) {
++            const f32_fold = try g.astype(fold_raw, .float32);
++            const amax = try g.maximum(try g.max(try g.abs(f32_fold), 1, true), try g.scalar(1e-8, .float32));
++            const scale = try g.mulScalar(amax, 1.0 / 127.0);
++            const scaled = try g.div(f32_fold, scale);
++            const rounded = try g.call(mlx.mlx_round, .{ scaled, @as(c_int, 0) });
++            const clipped = try g.call(mlx.mlx_clip, .{ rounded, try g.scalar(-127.0, .float32), try g.scalar(127.0, .float32) });
++            d.fold = try at.keep(try g.astype(clipped, .int8));
++            d.fold_scale = try at.keep(try g.reshape(scale, &.{rank}));
++        } else {
++            d.fold = try at.keep(fold_raw);
++        }
+         d.fold_bias = try at.keep(try project(&g, head, try g.reshape(out_b, &.{ 1, 1, @intCast(hidden) })));
+         return d;
+     }
+@@ -238,7 +284,8 @@ pub const Drafter = struct {
+             const mlp = try project(&lg, &L.down, try lg.mul(try lg.silu(try project(&lg, &L.gate, y)), try project(&lg, &L.up, y)));
+             h = try g.keep(try lg.add(mid, mlp));
+         }
+-        const rows = try g.sliceAxis(try g.rmsNorm(h, d.norm, cfg.eps), 1, 1, block);
++        const want_steps: c_int = if (d.max_steps > 0 and d.max_steps < cfg.block - 1) @intCast(d.max_steps) else block - 1;
++        const rows = try g.sliceAxis(try g.rmsNorm(h, d.norm, cfg.eps), 1, 1, 1 + want_steps);
+         const base = try g.astype(try project(g, head, rows), .float32);
+ 
+         if (cache) |cc| cc.end = at;
+@@ -259,10 +306,11 @@ pub const Drafter = struct {
+         var drafted: [abi.max_round_tokens]Array = undefined;
+         var sure: [abi.max_round_tokens]Array = undefined;
+         const dense_rows = try g.contiguous(rows);
++        const fold_dense = if (!fused and d.fold_scale != null) try g.astype(try g.mul(try g.astype(d.fold, .float32), try g.reshape(d.fold_scale.?, &.{ rank, 1 })), dt) else d.fold;
+         for (0..steps) |i| {
+             const at: c_int = @intCast(i);
+             if (fused) {
+-                const st = try kernels.markovStep(g, d.rnn.w, d.rnn_bias, state, d.prev_rows, dense_rows, newest, prev, d.fold, d.fold_bias, base, at, vocab, softcap);
++                const st = try kernels.markovStepOpt(g, d.rnn.w, d.rnn_bias, state, d.prev_rows, dense_rows, newest, prev, d.fold, d.fold_scale, d.fold_bias, base, at, vocab, softcap);
+                 state = st.state;
+                 prev = st.token;
+                 drafted[i] = st.token;
+@@ -276,7 +324,7 @@ pub const Drafter = struct {
+             const blend = try g.mul(try g.sub(try g.scalar(1, dt), keep), try g.astype(try g.tanh(try g.sliceAxis(p, 2, rank, 2 * rank)), dt));
+             state = try g.add(try g.mul(keep, state), blend);
+             const latent = try g.astype(try g.tanh(try g.sliceAxis(p, 2, 2 * rank, 3 * rank)), dt);
+-            const bias = try g.astype(try g.add(try g.matmul(latent, d.fold), d.fold_bias), .float32);
++            const bias = try g.astype(try g.add(try g.matmul(latent, fold_dense), d.fold_bias), .float32);
+             // The soft cap is monotonic: the pick over the real rows is the capped logits'; the probability is not.
+             const logits = try g.sliceAxis(try g.add(try g.sliceAxis(base, 1, at, at + 1), bias), 2, 0, vocab);
+             prev = try g.astype(try g.reshape(try g.argmax(logits, -1, false), &.{1}), .int32);
+@@ -294,6 +342,8 @@ const At = struct {
+     w: *const Weights,
+     g: *Graph,
+     layer: ?u32 = null,
++    use_f16: bool = false,
++    layer_bits: u32 = 16,
+ 
+     /// A new handle the graph owns.
+     fn raw(a: At, leaf: []const u8) !Array {
+@@ -311,16 +361,34 @@ const At = struct {
+     }
+ 
+     fn need(a: At, leaf: []const u8) !Array {
+-        return a.keep(try a.raw(leaf));
++        var x = try a.raw(leaf);
++        if (a.use_f16 and ops.dtype(x) == .bfloat16) x = try a.g.astype(x, .float16);
++        return a.keep(x);
+     }
+ 
+     fn float(a: At, leaf: []const u8) !Array {
+         return a.keep(try a.g.astype(try a.raw(leaf), .float32));
+     }
+ 
+-    /// A projection in the checkpoint's layout, `[out, in]`.
++    /// A projection in the checkpoint's layout, `[out, in]`. For drafter transformer layers on M1/M2,
++    /// optionally quantizes to affine FP16 (`layer_bits` in {4, 6, 8}) to slash drafter bandwidth.
+     fn linear(a: At, base: []const u8) !Linear {
+         var buf: [160]u8 = undefined;
+-        return .{ .w = try a.need(try std.fmt.bufPrint(&buf, "{s}.weight", .{base})) };
++        const wname = try std.fmt.bufPrint(&buf, "{s}.weight", .{base});
++        if (a.layer != null and a.layer_bits < 16) {
++            var wf = try a.raw(wname);
++            if (a.use_f16 and ops.dtype(wf) == .bfloat16) wf = try a.g.astype(wf, .float16);
++            var q = mlx.mlx_vector_array_new();
++            defer _ = mlx.mlx_vector_array_free(q);
++            try mlx.check(mlx.mlx_quantize(&q, wf, mlx.mlx_optional_int.some(64), mlx.mlx_optional_int.some(@intCast(a.layer_bits)), "affine", .{ .ctx = null }, a.g.s));
++            var parts: [3]Array = undefined;
++            for (&parts, 0..) |*p, i| {
++                var t = mlx.mlx_array_new();
++                try mlx.check(mlx.mlx_vector_array_get(&t, q, i));
++                p.* = try a.keep(try a.g.adopt(t));
++            }
++            return .{ .w = parts[0], .s = parts[1], .b = parts[2], .bits = a.layer_bits, .group_size = 64, .mode = .affine };
++        }
++        return .{ .w = try a.need(wname) };
+     }
+ };
+diff --git a/src/plugins/inkling2/kernels.zig b/src/plugins/inkling2/kernels.zig
+index 4cc4927..c30f680 100644
+--- a/src/plugins/inkling2/kernels.zig
++++ b/src/plugins/inkling2/kernels.zig
+@@ -38,10 +38,35 @@ const Kernel = struct {
+ 
+ /// The SDK's fp4 and fp8 decodes under the packed expert kernels' chunk reader.
+ pub const bank_header = moe_fp4.NV_SCALE ++ moe_fp4.DOT16 ++ mxfp8.HEADER ++ kernelSource("plugins/inkling2/kernels/bank_header.metal");
+-/// Output rows a SIMD group of a packed expert kernel owns (one: a lane's loop sets the launch's latency, and here
+-/// that beats keeping x in registers across rows), and the up kernel's SIMD groups per threadgroup.
+-const bank_rows: c_int = 1;
+-const bank_groups: c_int = 2;
++
++pub var qkv_ink2_kernel: Kernel = .{
++    .name = "msv_inkling2_qkv_dec",
++    .ins = &.{ "q", "kq", "ksc", "kbi", "vq", "vsc", "vbi", "scl", "tk", "bias" },
++    .outs = &.{ "m_out", "l_out", "o_out" },
++    .source = kernelSource("plugins/inkling2/kernels/qkv_ink2.metal"),
++    .header = "#include <metal_simdgroup_matrix>\n",
++    .contiguous = false,
++};
++pub var qkv_ink2_merge_kernel: Kernel = .{
++    .name = "msv_inkling2_qkv_merge",
++    .ins = &.{ "m_in", "l_in", "o_in", "sinks" },
++    .outs = &.{"out"},
++    .source = kernelSource("plugins/inkling2/kernels/qkv_ink2_merge.metal"),
++};
++pub var qkv_ink2_verify_kernel: Kernel = .{
++    .name = "msv_inkling2_qkv_ver",
++    .ins = &.{ "q", "kq", "ksc", "kbi", "vq", "vsc", "vbi", "k_new", "v_new", "scl", "tk", "rel" },
++    .outs = &.{ "m_out", "l_out", "o_out" },
++    .source = kernelSource("plugins/inkling2/kernels/qkv_ink2_verify.metal"),
++    .header = "#include <metal_simdgroup_matrix>\n",
++    .contiguous = false,
++};
++pub var qkv_ink2_verify_merge_kernel: Kernel = .{
++    .name = "msv_inkling2_qkv_ver_merge",
++    .ins = &.{ "m_in", "l_in", "o_in", "sinks", "gate" },
++    .outs = &.{"out"},
++    .source = kernelSource("plugins/inkling2/kernels/qkv_ink2_verify_merge.metal"),
++};
+ 
+ pub var pre_kernel: Kernel = .{ .name = "msv_inkling2_pre", .ins = &.{ "HIN", "BLK", "QY", "NW0", "NW1", "NW2", "BANK", "BPART", "MQ", "PR" }, .outs = &.{ "X", "NORMED", "A", "MSGO", "BOTH" }, .source = kernelSource("plugins/inkling2/kernels/pre.metal") };
+ pub var prep_kernel: Kernel = .{ .name = "msv_inkling2_prep", .ins = &.{ "QP", "GP", "RP", "KP", "VP", "KDY", "VDY", "ST", "KW", "VW", "QS", "RS", "RJ", "PR" }, .outs = &.{ "Q", "GATE", "K", "V", "BIAS", "REL" }, .source = kernelSource("plugins/inkling2/kernels/prep.metal") };
+@@ -61,7 +86,7 @@ pub var relcomb_kernel: Kernel = .{ .name = "msv_inkling2_relcomb", .ins = &.{ "
+ /// The Markov kernels' argmax order.
+ const markov_header = kernelSource("plugins/inkling2/kernels/markov_header.metal");
+ pub var markov_rnn_kernel: Kernel = .{ .name = "msv_inkling2_markov_rnn", .ins = &.{ "W", "B", "ST", "PREV", "ROWS", "NEW", "TOK", "AT" }, .outs = &.{"P"}, .source = kernelSource("plugins/inkling2/kernels/markov_rnn.metal") };
+-pub var markov_fold_kernel: Kernel = .{ .name = "msv_inkling2_markov_fold", .ins = &.{ "P", "FOLD", "FB", "BASE", "AT", "CAP" }, .outs = &.{ "PM", "PI", "PS" }, .source = kernelSource("plugins/inkling2/kernels/markov_fold.metal"), .header = markov_header };
++pub var markov_fold_kernel: Kernel = .{ .name = "msv_inkling2_markov_fold", .ins = &.{ "P", "FOLD", "FSCALE", "FB", "BASE", "AT", "CAP" }, .outs = &.{ "PM", "PI", "PS" }, .source = kernelSource("plugins/inkling2/kernels/markov_fold.metal"), .header = markov_header };
+ pub var markov_pick_kernel: Kernel = .{ .name = "msv_inkling2_markov_pick", .ins = &.{ "PM", "PI", "PS", "P", "ST", "CAP" }, .outs = &.{ "TOKN", "CONF", "NST" }, .source = kernelSource("plugins/inkling2/kernels/markov_pick.metal"), .header = markov_header };
+ pub var relslots_kernel: Kernel = .{ .name = "msv_inkling2_relslots", .ins = &.{ "q", "k0", "k1", "k2", "k3", "k4", "k5", "k6", "k7", "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "rel", "sinks", "KEYS", "scale" }, .outs = &.{ "PART", "ML" }, .source = kernelSource("plugins/inkling2/kernels/relslots.metal"), .contiguous = false };
+ pub var relmask_kernel: Kernel = .{ .name = "msv_inkling2_relmask", .ins = &.{ "rel", "sinks", "sizes" }, .outs = &.{"M"}, .source = kernelSource("plugins/inkling2/kernels/relmask.metal") };
+@@ -187,12 +212,12 @@ pub fn runs(g: *const Graph, L: *const Layer, cfg: *const Config, h: Array) bool
+ const Messaged = struct { bank: Array, partial: Array, query: Array, gt: Dtype };
+ 
+ /// `pre.metal` on the stream `h` `[1, S, D]`: its outputs in order.
+-fn streams(g: *Graph, cfg: *const Config, h: Array, blocks: ?Array, query: Array, nw: [3]Array, inputs: c_int, msg: ?Messaged) ![5]Array {
++fn streams(g: *Graph, cfg: *const Config, h: Array, blocks: ?Array, query: Array, nw: [3]Array, inputs: c_int, msg: ?Messaged, c_eps: Array) ![5]Array {
+     const d: c_int = @intCast(cfg.hidden_size);
+     const s = ops.shape(h)[1];
+     const dt = ops.dtype(h);
+     const q: c_int = if (query.ctx != null) ops.shape(query)[1] else 0;
+-    const eps = try g.fromSlice(f32, &.{cfg.rms_norm_eps}, &.{1});
++    const eps = if (c_eps.ctx != null) c_eps else try g.fromSlice(f32, &.{cfg.rms_norm_eps}, &.{1});
+     const m: Messaged = msg orelse .{ .bank = h, .partial = h, .query = h, .gt = .float32 };
+     const on = msg != null;
+     while (true) {
+@@ -220,16 +245,29 @@ fn streams(g: *Graph, cfg: *const Config, h: Array, blocks: ?Array, query: Array
+ pub fn gate(g: *Graph, gates: *const layers.Gates, a: Array, ms: Array, st: Array, from: c_int, n: c_int) !Array {
+     const sh = ops.shape(gates.forget);
+     const s = ops.shape(st)[1];
++    const d: c_int = if (gates.transposed) sh[2] else sh[1];
++    const rank: c_int = if (gates.transposed) sh[1] else sh[2];
+     var forget = try g.sliceAxis(gates.forget, 0, from, from + n);
+     var message = try g.sliceAxis(gates.message, 0, from, from + n);
+     const projected = s > small_rows;
+     if (projected) {
+         const st32 = try g.astype(st, .float32);
+-        forget = try g.matmul(st32, try g.transpose(try g.astype(forget, .float32), &.{ 0, 2, 1 }));
+-        message = try g.matmul(st32, try g.transpose(try g.astype(message, .float32), &.{ 0, 2, 1 }));
++        if (gates.transposed) {
++            forget = try g.matmul(st32, try g.astype(forget, .float32));
++            message = try g.matmul(st32, try g.astype(message, .float32));
++        } else {
++            forget = try g.matmul(st32, try g.transpose(try g.astype(forget, .float32), &.{ 0, 2, 1 }));
++            message = try g.matmul(st32, try g.transpose(try g.astype(message, .float32), &.{ 0, 2, 1 }));
++        }
+     }
+-    const o = try launch(g, &gate_kernel, &.{ a, ms, st, forget, message }, 1, .{.{ .shape = &.{ n, s, sh[1] }, .dtype = .float32 }}, n * s * sh[1], 64, &.{
+-        .{ "D", .{ .int = sh[1] } }, .{ "RANK", .{ .int = sh[2] } }, .{ "PROJ", .{ .int = @intFromBool(projected) } },
++    const tg_x: c_int = if (@rem(d, 128) == 0) 128 else if (@rem(d, 64) == 0) 64 else if (@rem(d, 32) == 0) 32 else 1;
++    const o = try launchGrid(g, &gate_kernel, &.{ a, ms, st, forget, message }, 1, .{.{ .shape = &.{ n, s, d }, .dtype = .float32 }}, .{ d, s, n }, .{ tg_x, 1, 1 }, &.{
++        .{ "D", .{ .int = d } },
++        .{ "RANK", .{ .int = rank } },
++        .{ "PROJ", .{ .int = @intFromBool(projected) } },
++        .{ "TRANS", .{ .int = @intFromBool(gates.transposed) } },
++        .{ "TG", .{ .int = tg_x } },
++        .{ "GT", .{ .dtype = ops.dtype(forget) } },
+     });
+     return o[0];
+ }
+@@ -241,11 +279,11 @@ fn routerThreads(cfg: *const Config, tg: c_int) c_int {
+ 
+ /// The `n` streams `y` `[n, S, D]` f32 under their weighted RMS norms, `[n, S, D]` in `dt`; with a `router`, its
+ /// scores `[S, E]` f32 over the first.
+-fn norm(g: *Graph, cfg: *const Config, y: Array, nw: [3]Array, n: c_int, dt: Dtype, router: ?Array) ![2]Array {
++fn norm(g: *Graph, cfg: *const Config, y: Array, nw: [3]Array, n: c_int, dt: Dtype, router: ?Array, c_eps: Array) ![2]Array {
+     const d: c_int = @intCast(cfg.hidden_size);
+     const s = ops.shape(y)[1];
+     const experts_n: c_int = if (router != null) @intCast(cfg.num_experts) else 0;
+-    const eps = try g.fromSlice(f32, &.{cfg.rms_norm_eps}, &.{1});
++    const eps = if (c_eps.ctx != null) c_eps else try g.fromSlice(f32, &.{cfg.rms_norm_eps}, &.{1});
+     while (true) {
+         const tg = streamGroup(cfg.hidden_size) orelse return error.ThreadLimit;
+         return launchGrid(g, &norm_kernel, &.{ y, nw[0], nw[1], nw[2], router orelse y, eps }, 2, .{
+@@ -270,13 +308,13 @@ pub fn pre(g: *Graph, L: *const Layer, w: *const Body, h: Array, blocks: ?Array,
+     var messages: ?Array = null;
+     if (bank) |bk| {
+         const gates = &(L.gates orelse return error.Inkling2NoMessageGate);
+-        const o = try streams(g, cfg, h, blocks, L.attn_query, L.in_norm, 3, .{ .bank = bk[0], .partial = bk[1], .query = L.message_query, .gt = ops.dtype(gates.down) });
++        const o = try streams(g, cfg, h, blocks, L.attn_query, L.in_norm, 3, .{ .bank = bk[0], .partial = bk[1], .query = L.message_query, .gt = ops.dtype(gates.down) }, w.c_eps);
+         const st = try g.matmul(o[4], try layers.downs(g, gates, 0, 3));
+-        x = (try norm(g, cfg, try gate(g, gates, o[2], o[3], st, 0, 3), L.in_norm, 3, dt, null))[0];
++        x = (try norm(g, cfg, try gate(g, gates, o[2], o[3], st, 0, 3), L.in_norm, 3, dt, null, w.c_eps))[0];
+         normed = o[1];
+         messages = o[3];
+     } else {
+-        const o = try streams(g, cfg, h, blocks, L.attn_query, L.in_norm, if (L.global) 3 else 1, null);
++        const o = try streams(g, cfg, h, blocks, L.attn_query, L.in_norm, if (L.global) 3 else 1, null, w.c_eps);
+         x = o[0];
+         normed = o[1];
+     }
+@@ -292,7 +330,7 @@ pub fn pre(g: *Graph, L: *const Layer, w: *const Body, h: Array, blocks: ?Array,
+ pub fn finalStream(g: *Graph, w: *const Body, h: Array, blocks: ?Array, norm_weight: Array) !?Array {
+     if (!mlx.streamIsGpu(g.s) or !enabled() or streamGroup(w.cfg.hidden_size) == null) return null;
+     if (!floating(ops.dtype(h)) or !floating(ops.dtype(norm_weight))) return null;
+-    return (try streams(g, &w.cfg, h, blocks, w.final_query, @splat(norm_weight), 1, null))[0];
++    return (try streams(g, &w.cfg, h, blocks, w.final_query, @splat(norm_weight), 1, null, w.c_eps))[0];
+ }
+ 
+ /// What the attention read takes: q (clipped; `[1, H, 1, hd]` log-scaled at one row, `[1, S, H, hd]` for more), the
+@@ -370,9 +408,13 @@ pub fn oGated(g: *Graph, o: *const layers.Linear, att: Array, gate_sigmoid: Arra
+     const f = oFormat(o, dt) orelse return error.Inkling2OutputLayout;
+     const n = ops.shape(o.w)[0];
+     const affine = f.fmt == 3;
+-    const y = try launchGrid(g, &oproj_kernel, &.{ att, gate_sigmoid, o.w, if (affine) o.s else o.w, if (affine) o.b else o.w }, 1, .{.{ .shape = &.{ 1, 1, n }, .dtype = dt }}, .{ 32, n, 1 }, .{ 32, 4, 1 }, &.{
++    const rows: c_int = if (@rem(n, 4) == 0) 4 else 1;
++    const gy = @divExact(n, rows);
++    const sgs: c_int = if (@rem(gy, 4) == 0) 4 else if (@rem(gy, 2) == 0) 2 else 1;
++    const y = try launchGrid(g, &oproj_kernel, &.{ att, gate_sigmoid, o.w, if (affine) o.s else o.w, if (affine) o.b else o.w }, 1, .{.{ .shape = &.{ 1, 1, n }, .dtype = dt }}, .{ 32, gy, 1 }, .{ 32, sgs, 1 }, &.{
+         .{ "T", .{ .dtype = dt } },               .{ "S", .{ .dtype = if (affine) ops.dtype(o.s) else dt } }, .{ "K", .{ .int = f.k } },
+         .{ "GS", .{ .int = @intCast(f.gs) } },    .{ "BITS", .{ .int = @intCast(f.bits) } },                    .{ "FMT", .{ .int = f.fmt } },
++        .{ "ROWS", .{ .int = rows } },
+     });
+     return y[0];
+ }
+@@ -440,8 +482,10 @@ const markov_cols = 8;
+ /// Whether `markovStep` serves a drafter of `rank` whose fold is `fold` `[rank, V]` and RNN weight `rnn` on `g`'s
+ /// stream: half dtypes, the fold read 8 columns at a time.
+ pub fn markovRuns(g: *const Graph, rnn: Array, fold: Array, rank: c_int) bool {
+-    const dt = ops.dtype(fold);
+-    if (!mlx.streamIsGpu(g.s) or !enabled() or (dt != .bfloat16 and dt != .float16) or ops.dtype(rnn) != dt) return false;
++    const rdt = ops.dtype(rnn);
++    const fdt = ops.dtype(fold);
++    if (!mlx.streamIsGpu(g.s) or !enabled() or (rdt != .bfloat16 and rdt != .float16)) return false;
++    if (fdt != rdt and fdt != .int8) return false;
+     return @rem(ops.shape(fold)[1], markov_cols) == 0 and @rem(3 * rank, 8) == 0;
+ }
+ 
+@@ -452,10 +496,14 @@ pub fn markovRuns(g: *const Graph, rnn: Array, fold: Array, rank: c_int) bool {
+ pub const MarkovStep = struct { token: Array, confidence: Array, state: Array };
+ 
+ pub fn markovStep(g: *Graph, rnn: Array, rnn_bias: Array, state: Array, prev_rows: Array, rows: Array, newest: Array, token: Array, fold: Array, fold_bias: Array, base: Array, at: c_int, vocab: c_int, softcap: f32) !MarkovStep {
++    return markovStepOpt(g, rnn, rnn_bias, state, prev_rows, rows, newest, token, fold, null, fold_bias, base, at, vocab, softcap);
++}
++
++pub fn markovStepOpt(g: *Graph, rnn: Array, rnn_bias: Array, state: Array, prev_rows: Array, rows: Array, newest: Array, token: Array, fold: Array, fold_scale: ?Array, fold_bias: Array, base: Array, at: c_int, vocab: c_int, softcap: f32) !MarkovStep {
+     const step = try g.fromSlice(i32, &.{at}, &.{1});
+     const cap = try g.fromSlice(f32, &.{softcap}, &.{1});
+     const p = try markovRnn(g, rnn, rnn_bias, state, prev_rows, rows, newest, token, step);
+-    const o = try markovPick(g, try markovFold(g, p, fold, fold_bias, base, step, vocab, cap), p, state, cap);
++    const o = try markovPick(g, try markovFoldOpt(g, p, fold, fold_scale, fold_bias, base, step, vocab, cap), p, state, cap);
+     return .{ .token = o[0], .confidence = o[1], .state = o[2] };
+ }
+ 
+@@ -470,12 +518,18 @@ pub fn markovRnn(g: *Graph, rnn: Array, rnn_bias: Array, state: Array, prev_rows
+ 
+ /// `markov_fold.metal`: each fold threadgroup's (max, argmax, sum of exp) over the step's `vocab` logits.
+ pub fn markovFold(g: *Graph, p: Array, fold: Array, fold_bias: Array, base: Array, step: Array, vocab: c_int, cap: Array) ![3]Array {
++    return markovFoldOpt(g, p, fold, null, fold_bias, base, step, vocab, cap);
++}
++
++pub fn markovFoldOpt(g: *Graph, p: Array, fold: Array, fold_scale: ?Array, fold_bias: Array, base: Array, step: Array, vocab: c_int, cap: Array) ![3]Array {
+     const groups = @divTrunc(vocab + markov_tg * markov_cols - 1, markov_tg * markov_cols);
+-    return launch(g, &markov_fold_kernel, &.{ p, fold, fold_bias, base, step, cap }, 3, .{
++    const q8 = fold_scale != null and ops.dtype(fold) == .int8;
++    const t_dt = if (q8) ops.dtype(fold_bias) else ops.dtype(fold);
++    return launch(g, &markov_fold_kernel, &.{ p, fold, fold_scale orelse cap, fold_bias, base, step, cap }, 3, .{
+         .{ .shape = &.{groups}, .dtype = .float32 }, .{ .shape = &.{groups}, .dtype = .uint32 }, .{ .shape = &.{groups}, .dtype = .float32 },
+     }, groups * markov_tg, markov_tg, &.{
+-        .{ "T", .{ .dtype = ops.dtype(fold) } }, .{ "R", .{ .int = ops.shape(fold)[0] } }, .{ "TG", .{ .int = markov_tg } },
+-        .{ "VPT", .{ .int = markov_cols } },     .{ "VOCAB", .{ .int = vocab } },
++        .{ "T", .{ .dtype = t_dt } }, .{ "R", .{ .int = ops.shape(fold)[0] } }, .{ "TG", .{ .int = markov_tg } },
++        .{ "VPT", .{ .int = markov_cols } }, .{ "VOCAB", .{ .int = vocab } }, .{ "Q8", .{ .int = @intFromBool(q8) } },
+     });
+ }
+ 
+@@ -589,8 +643,137 @@ pub fn commit(c: *block.Ctx, cfg: *const Config, opens: []const Open, rows: c_in
+ /// `layers.attend`: appends the visit's k and v, reads under the bias and the `sinks`, gates. An `open` verify reads
+ /// the cache's rows with its own behind them and appends nothing.
+ /// `raw`: one row's read is returned without its output gate, which `oGated` folds into the output projection.
+-fn attend(c: *block.Ctx, L: *const Layer, cfg: *const Config, p: *const Prep, sinks: Array, open: ?*Open, raw: bool) !Array {
++fn qkvInk2(g: *Graph, q: Array, dv: anytype, scale: f32, c_attn_scale: Array, bias: Array, sinks: Array, out_gate: ?Array) !Array {
++    const qsh = ops.shape(q);
++    const h_q = qsh[1];
++    const hd = qsh[3];
++    const ksh = ops.shape(dv.k_triple_q);
++    const h_kv = ksh[1];
++    const t_k = ksh[2];
++    const gqa = @divExact(h_q, h_kv);
++    const dt = ops.dtype(q);
++    const nsplit: c_int = std.math.clamp(@divTrunc(t_k + 255, 256), 1, 16);
++    const scl = if (c_attn_scale.ctx != null) c_attn_scale else try g.fromSlice(f32, &.{scale}, &.{1});
++    const tk = try g.fromSlice(i32, &.{t_k}, &.{1});
++    const parts = try launchGrid(
++        g,
++        &qkv_ink2_kernel,
++        &.{ q, dv.k_triple_q, dv.k_triple_scales, dv.k_triple_biases, dv.v_triple_q, dv.v_triple_scales, dv.v_triple_biases, scl, tk, bias },
++        3,
++        .{
++            .{ .shape = &.{ h_q, nsplit }, .dtype = .float32 },
++            .{ .shape = &.{ h_q, nsplit }, .dtype = .float32 },
++            .{ .shape = &.{ h_q, nsplit, hd }, .dtype = .float32 },
++        },
++        .{ 128, h_kv, nsplit },
++        .{ 128, 1, 1 },
++        &.{
++            .{ "T", .{ .dtype = dt } },
++            .{ "BITS", .{ .int = @intCast(dv.bits) } },
++            .{ "GS", .{ .int = @intCast(dv.group_size) } },
++            .{ "DK", .{ .int = hd } },
++            .{ "DV", .{ .int = hd } },
++            .{ "GQA", .{ .int = gqa } },
++        },
++    );
++    if (out_gate) |gt| {
++        const merged = try launchGrid(
++            g,
++            &qkv_ink2_verify_merge_kernel,
++            &.{ parts[0], parts[1], parts[2], try g.reshape(sinks, &.{h_q}), gt },
++            1,
++            .{.{ .shape = &.{ 1, 1, h_q * hd }, .dtype = dt }},
++            .{ hd, h_q, 1 },
++            .{ hd, 1, 1 },
++            &.{
++                .{ "T", .{ .dtype = dt } },
++                .{ "NS", .{ .int = nsplit } },
++                .{ "DV", .{ .int = hd } },
++            },
++        );
++        return merged[0];
++    }
++    const merged = try launchGrid(
++        g,
++        &qkv_ink2_merge_kernel,
++        &.{ parts[0], parts[1], parts[2], try g.reshape(sinks, &.{h_q}) },
++        1,
++        .{.{ .shape = &.{ h_q, hd }, .dtype = dt }},
++        .{ hd, h_q, 1 },
++        .{ hd, 1, 1 },
++        &.{
++            .{ "T", .{ .dtype = dt } },
++            .{ "NS", .{ .int = nsplit } },
++            .{ "DV", .{ .int = hd } },
++        },
++    );
++    return g.reshape(merged[0], &.{ 1, h_q, 1, hd });
++}
++
++fn qkvInk2Verify(g: *Graph, L: *const Layer, cfg: *const Config, p: *const Prep, sinks: Array, dv: anytype, from: c_int, rows: c_int, offset: c_int, s: c_int) !Array {
++    const dt = ops.dtype(p.q);
++    const h_q: c_int = @intCast(cfg.num_attention_heads);
++    const h_kv: c_int = @intCast(cfg.num_key_value_heads);
++    const hd: c_int = @intCast(cfg.head_dim);
++    const gqa = @divExact(h_q, h_kv);
++    const t_k = rows - from;
++    const window: c_int = if (L.global) 0 else @intCast(cfg.sliding_window);
++    const in = try readInputs(g, L, cfg, p.q, p.rel, sinks, offset);
++    const rel_c = try g.contiguous(in.bias);
++    const kq = if (from > 0) try g.sliceAxis(dv.k_triple_q, 2, from, rows) else dv.k_triple_q;
++    const ksc = if (from > 0) try g.sliceAxis(dv.k_triple_scales, 2, from, rows) else dv.k_triple_scales;
++    const kbi = if (from > 0) try g.sliceAxis(dv.k_triple_biases, 2, from, rows) else dv.k_triple_biases;
++    const vq = if (from > 0) try g.sliceAxis(dv.v_triple_q, 2, from, rows) else dv.v_triple_q;
++    const vsc = if (from > 0) try g.sliceAxis(dv.v_triple_scales, 2, from, rows) else dv.v_triple_scales;
++    const vbi = if (from > 0) try g.sliceAxis(dv.v_triple_biases, 2, from, rows) else dv.v_triple_biases;
++    const nsplit: c_int = std.math.clamp(@divTrunc(t_k + 255, 256), 1, 16);
++    const scl = try g.fromSlice(f32, &.{1.0 / @sqrt(@as(f32, @floatFromInt(hd)))}, &.{1});
++    const tk = try g.fromSlice(i32, &.{t_k}, &.{1});
++    const parts = try launchGrid(
++        g,
++        &qkv_ink2_verify_kernel,
++        &.{ in.q, kq, ksc, kbi, vq, vsc, vbi, p.k, p.v, scl, tk, rel_c },
++        3,
++        .{
++            .{ .shape = &.{ s * h_q, nsplit }, .dtype = .float32 },
++            .{ .shape = &.{ s * h_q, nsplit }, .dtype = .float32 },
++            .{ .shape = &.{ s * h_q, nsplit, hd }, .dtype = .float32 },
++        },
++        .{ 128, h_kv, nsplit },
++        .{ 128, 1, 1 },
++        &.{
++            .{ "T", .{ .dtype = dt } },
++            .{ "BITS", .{ .int = @intCast(dv.bits) } },
++            .{ "GS", .{ .int = @intCast(dv.group_size) } },
++            .{ "DK", .{ .int = hd } },
++            .{ "DV", .{ .int = hd } },
++            .{ "GQA", .{ .int = gqa } },
++            .{ "HQ", .{ .int = h_q } },
++            .{ "R", .{ .int = ops.shape(rel_c)[3] } },
++            .{ "WINDOW", .{ .int = window } },
++            .{ "SROWS", .{ .int = s } },
++        },
++    );
++    const merged = try launchGrid(
++        g,
++        &qkv_ink2_verify_merge_kernel,
++        &.{ parts[0], parts[1], parts[2], try g.reshape(in.sinks, &.{s * h_q}), p.gate },
++        1,
++        .{.{ .shape = &.{ 1, s, h_q * hd }, .dtype = dt }},
++        .{ hd, s * h_q, 1 },
++        .{ hd, 1, 1 },
++        &.{
++            .{ "T", .{ .dtype = dt } },
++            .{ "NS", .{ .int = nsplit } },
++            .{ "DV", .{ .int = hd } },
++        },
++    );
++    return merged[0];
++}
++
++fn attend(c: *block.Ctx, L: *const Layer, w: *const Body, p: *const Prep, sinks: Array, open: ?*Open, raw: bool) !Array {
+     const g = c.g;
++    const cfg = &w.cfg;
+     const heads: c_int = @intCast(cfg.num_attention_heads);
+     const hd: c_int = @intCast(cfg.head_dim);
+     const s = c.rows;
+@@ -601,11 +784,18 @@ fn attend(c: *block.Ctx, L: *const Layer, cfg: *const Config, p: *const Prep, si
+         var held = try kv.view(c, c.cache(), c.layer);
+         defer kv.release(c, &held);
+         const dv = kv.dense(held);
++        const dt = ops.dtype(p.q);
++        o.k = try o.g.keep(p.k);
++        o.v = try o.g.keep(p.v);
++        const can_qkv_ver = dv.has_quant_triple and s <= 8 and (dv.bits == 4 or dv.bits == 8) and dv.group_size > 0 and @rem(dv.group_size, 8) == 0 and (dt == .float16 or dt == .bfloat16) and @rem(hd, 32) == 0 and hd <= 256 and std.c.getenv("INKLING_NO_FUSED_QKV_VERIFY") == null;
++        if (can_qkv_ver) {
++            const rows = ops.shape(dv.k_triple_q)[2];
++            const from = if (span > 0) @max(0, rows - @as(c_int, @intCast(span - 1))) else 0;
++            return qkvInk2Verify(g, L, cfg, p, sinks, dv, from, rows, offset, s);
++        }
+         const rows = ops.shape(dv.k)[2];
+         // A sliding layer's rows reach at most `window - 1` keys before the block.
+         const from = if (span > 0) @max(0, rows - @as(c_int, @intCast(span - 1))) else 0;
+-        o.k = try o.g.keep(p.k);
+-        o.v = try o.g.keep(p.v);
+         const keys = try g.concat(&.{ try g.sliceAxis(dv.k, 2, from, rows), p.k }, 2);
+         const values = try g.concat(&.{ try g.sliceAxis(dv.v, 2, from, rows), p.v }, 2);
+         return readRows(g, L, cfg, p, sinks, keys, values, offset, s);
+@@ -614,6 +804,11 @@ fn attend(c: *block.Ctx, L: *const Layer, cfg: *const Config, p: *const Prep, si
+     defer kv.release(c, &view);
+     const dv = kv.dense(view);
+     if (s > 1) return readRows(g, L, cfg, p, sinks, dv.k, dv.v, offset, s);
++    const dt = ops.dtype(p.q);
++    const can_qkv = dv.has_quant_triple and (dv.bits == 4 or dv.bits == 8) and dv.group_size > 0 and @rem(dv.group_size, 8) == 0 and (dt == .float16 or dt == .bfloat16) and @rem(hd, 32) == 0 and hd <= 256 and std.c.getenv("INKLING_NO_FUSED_QKV") == null;
++    if (can_qkv) {
++        return qkvInk2(g, p.q, dv, 1.0 / @sqrt(@as(f32, @floatFromInt(hd))), w.c_attn_scale, p.bias, sinks, if (raw) null else p.gate);
++    }
+     if (ops.shape(dv.k)[2] != ops.shape(p.bias)[3]) return error.Inkling2KvView;
+     const attn = try sdpaSinks(g, p.q, dv.k, dv.v, 1.0 / @sqrt(@as(f32, @floatFromInt(hd))), "array", p.bias, try g.reshape(sinks, &.{heads}), false);
+     return if (raw) attn else gated(g, attn, p.gate, 1);
+@@ -804,7 +999,7 @@ pub fn mid(g: *Graph, L: *const Layer, w: *const Body, attn: Array, out_gate: ?A
+     const gates: ?*const layers.Gates = if (messages != null) &(L.gates orelse return error.Inkling2NoMessageGate) else null;
+     const gt: Dtype = if (gates) |x| ops.dtype(x.down) else .float32;
+     const msg3: Array = if (messages) |m| try g.sliceAxis(m, 0, 3, 4) else h;
+-    const pr = try g.fromSlice(f32, &.{ 1.0 / @sqrt(@as(f32, @floatFromInt(kt + 1))), cfg.rms_norm_eps }, &.{2});
++    const pr = if (w.c_mid_pr.ctx != null) w.c_mid_pr else try g.fromSlice(f32, &.{ 1.0 / @sqrt(@as(f32, @floatFromInt(kt + 1))), cfg.rms_norm_eps }, &.{2});
+     const on = gates != null;
+     const o = while (true) {
+         const tg = streamGroup(cfg.hidden_size) orelse return error.ThreadLimit;
+@@ -829,11 +1024,12 @@ pub fn mid(g: *Graph, L: *const Layer, w: *const Body, attn: Array, out_gate: ?A
+     var scores: Array = undefined;
+     if (gates) |gs| {
+         const state = try g.matmul(o[4], try layers.downs(g, gs, 3, 1));
+-        const xs = try norm(g, cfg, try gate(g, gs, o[3], msg3, state, 3, 1), @splat(L.post_norm), 1, dt, L.router);
++        const xs = try norm(g, cfg, try gate(g, gs, o[3], msg3, state, 3, 1), @splat(L.post_norm), 1, dt, L.router, w.c_eps);
+         x = xs[0];
+         scores = xs[1];
+     } else scores = if (s > 1 and s <= small_rows) try routerRows(g, o[2], L.router) else try g.matmul(o[2], try g.transpose(L.router, &.{ 1, 0 }));
+-    const picks = try topK(g, scores, L.router_bias, try g.fromSlice(f32, &.{cfg.route_scale}, &.{1}), top_k);
++    const rscale = if (w.c_route_scale.ctx != null) w.c_route_scale else try g.fromSlice(f32, &.{cfg.route_scale}, &.{1});
++    const picks = try topK(g, scores, L.router_bias, rscale, top_k);
+     var opened: ?Array = null;
+     if (L.boundary) {
+         const saved = try g.expandDims(normed, 2);
+@@ -847,23 +1043,22 @@ pub const Tail = struct { h: Array, state: Array };
+ 
+ /// The picked experts' soft-capped SwiGLU `[N, 1, I]` in `gu`'s dtype: `gu` `[N, 1, 2 I]` holds each pick's gate
+ /// (even) and up (odd) rows, times `scale[sel]` when `scaled`; `caps` = { 1 / gate cap, gate cap, 1 / up cap, up cap }.
+-pub fn activation(g: *Graph, gu: Array, sel: Array, scale: Array, caps: Array, scaled: bool) !Array {
++pub fn activation(g: *Graph, gu: Array, sel: Array, scale: Array, caps: Array, scaled: bool, out_dt: Dtype) !Array {
+     const sh = ops.shape(gu);
+     const inter = @divExact(sh[2], 2);
+-    const o = try launch(g, &act_kernel, &.{ gu, sel, scale, caps }, 1, .{.{ .shape = &.{ sh[0], 1, inter }, .dtype = ops.dtype(gu) }}, sh[0] * inter, 64, &.{ .{ "T", .{ .dtype = ops.dtype(gu) } }, .{ "SCALED", .{ .int = @intFromBool(scaled) } } });
++    const o = try launch(g, &act_kernel, &.{ gu, sel, scale, caps }, 1, .{.{ .shape = &.{ sh[0], 1, inter }, .dtype = out_dt }}, sh[0] * inter, 64, &.{ .{ "T", .{ .dtype = out_dt } }, .{ "SCALED", .{ .int = @intFromBool(scaled) } } });
+     return o[0];
+ }
+ 
+-/// A visit's output stream and MLP output `[1, S, D]`, each in `dn`'s dtype: the rows' `k` picks `dn` `[S * k, 1, D]`
++/// A visit's output stream and MLP output `[1, S, D]`, each in `out_dt`: the rows' `k` picks `dn` `[S * k, 1, D]`
+ /// (pair (row, pick) at `inverse[row * k + pick]`, of expert `sel` there) times `scale[sel]` when `scaled` and their
+ /// routing `weights` `[1, S, k]`, summed; then the MLP's short conv behind `st` with `taps`, and the residual.
+-pub fn pickSum(g: *Graph, dn: Array, sel: Array, inverse: Array, scale: Array, weights: Array, residual: Array, st: Array, taps: Array, conv_scale: Array, k: c_int, scaled: bool) ![2]Array {
++pub fn pickSum(g: *Graph, dn: Array, sel: Array, inverse: Array, scale: Array, weights: Array, residual: Array, st: Array, taps: Array, conv_scale: Array, k: c_int, scaled: bool, out_dt: Dtype) ![2]Array {
+     const s = ops.shape(residual)[1];
+     const d = ops.shape(residual)[2];
+-    const dt = ops.dtype(dn);
+-    const out: Out = .{ .shape = &.{ 1, s, d }, .dtype = dt };
++    const out: Out = .{ .shape = &.{ 1, s, d }, .dtype = out_dt };
+     return launch(g, &sum_kernel, &.{ dn, sel, inverse, scale, weights, residual, st, taps, conv_scale }, 2, .{ out, out }, s * d, 64, &.{
+-        .{ "T", .{ .dtype = dt } }, .{ "WT", .{ .dtype = ops.dtype(taps) } }, .{ "K", .{ .int = k } }, .{ "KT", .{ .int = ops.shape(st)[1] + 1 } }, .{ "SCALED", .{ .int = @intFromBool(scaled) } }, .{ "SEQ", seqOf(st) },
++        .{ "T", .{ .dtype = out_dt } }, .{ "WT", .{ .dtype = ops.dtype(taps) } }, .{ "K", .{ .int = k } }, .{ "KT", .{ .int = ops.shape(st)[1] + 1 } }, .{ "SCALED", .{ .int = @intFromBool(scaled) } }, .{ "SEQ", seqOf(st) },
+     });
+ }
+ 
+@@ -886,7 +1081,7 @@ pub fn packedFormat(bank: anytype, in_dim: c_int) ?c_int {
+         else => return null,
+     };
+     const rows = ops.shape(bank.w)[1];
+-    return if (@rem(in_dim, 32) == 0 and @rem(rows, 2 * bank_rows) == 0 and @rem(rows, 2 * bank_groups) == 0) fmt else null;
++    return if (@rem(in_dim, 16) == 0 and @rem(rows, 2) == 0) fmt else null;
+ }
+ 
+ fn affineWidth(bits: u32, group: u32) bool {
+@@ -904,6 +1099,10 @@ fn biasesOf(bank: anytype) Array {
+ /// weighted sum, the MLP's conv behind `st` and the final add as a second. Another bank, or more rows (their pairs
+ /// sorted by expert), go through MLX's gather, with the SwiGLU and the sum, conv and add as launches of their own.
+ pub fn experts(g: *Graph, L: *const Layer, cfg: *const Config, m: *const Middle, kp: Array, vp: Array, st: Array, open: ?*Open) !Tail {
++    return expertsWith(g, L, cfg, .{}, .{}, m, kp, vp, st, open);
++}
++
++fn expertsWith(g: *Graph, L: *const Layer, cfg: *const Config, c_caps: Array, c_conv_scale: Array, m: *const Middle, kp: Array, vp: Array, st: Array, open: ?*Open) !Tail {
+     const dt = ops.dtype(m.x);
+     const s = ops.shape(m.x)[1];
+     const top_k: c_int = @intCast(cfg.top_k);
+@@ -915,8 +1114,8 @@ pub fn experts(g: *Graph, L: *const Layer, cfg: *const Config, m: *const Middle,
+     const few = s > 1 and s <= packed_rows and 32 * top_k <= sure_threads and packedFormat(&L.gate_up, hidden) != null and packedFormat(&L.down, inter) != null;
+     const pairs = try layers.pairs(g, cfg, m.x, m.idx);
+     const sel = if (few) try g.reshape(m.idx, &.{n}) else pairs.sel;
+-    const caps = try g.fromSlice(f32, &.{ 1.0 / cfg.gate_softcap, cfg.gate_softcap, 1.0 / cfg.up_softcap, cfg.up_softcap }, &.{4});
+-    const conv_scale = try g.fromSlice(f32, &.{1.0 / @sqrt(@as(f32, @floatFromInt(kt + 1)))}, &.{1});
++    const caps = if (c_caps.ctx != null) c_caps else try g.fromSlice(f32, &.{ 1.0 / cfg.gate_softcap, cfg.gate_softcap, 1.0 / cfg.up_softcap, cfg.up_softcap }, &.{4});
++    const conv_scale = if (c_conv_scale.ctx != null) c_conv_scale else try g.fromSlice(f32, &.{1.0 / @sqrt(@as(f32, @floatFromInt(kt + 1)))}, &.{1});
+     const gu_scale = if (L.gate_up_scale.ctx != null) L.gate_up_scale else caps;
+     const dn_scale = if (L.down_scale.ctx != null) L.down_scale else m.weights;
+     const gu_scaled: TArg = .{ .int = @intFromBool(L.gate_up_scale.ctx != null) };
+@@ -925,38 +1124,44 @@ pub fn experts(g: *Graph, L: *const Layer, cfg: *const Config, m: *const Middle,
+     const tail_out: [2]Out = .{ .{ .shape = &.{ 1, s, hidden }, .dtype = dt }, .{ .shape = &.{ 1, s, hidden }, .dtype = dt } };
+     const sorted = pairs.inverse != null;
+ 
++    const up_rows: c_int = if (@rem(inter, 2) == 0) 2 else 1;
++    const up_gy = @divExact(inter, up_rows);
++    const up_bg: c_int = if (@rem(up_gy, 8) == 0) 8 else if (@rem(up_gy, 4) == 0) 4 else if (@rem(up_gy, 2) == 0) 2 else 1;
+     const act = if (if (s == 1 or few) packedFormat(&L.gate_up, hidden) else null) |fmt|
+-        try launchGrid(g, &ups_kernel, &.{ m.x, L.gate_up.w, L.gate_up.s, biasesOf(&L.gate_up), sel, gu_scale, caps }, 1, act_out, .{ 32, @divExact(inter, bank_rows), n }, .{ 32, bank_groups, 1 }, &.{
++        try launchGrid(g, &ups_kernel, &.{ m.x, L.gate_up.w, L.gate_up.s, biasesOf(&L.gate_up), sel, gu_scale, caps }, 1, act_out, .{ 32, up_gy, n }, .{ 32, up_bg, 1 }, &.{
+             .{ "T", .{ .dtype = dt } },                               .{ "K", .{ .int = hidden } }, .{ "I", .{ .int = inter } },
+-            .{ "GS", .{ .int = @intCast(L.gate_up.qp.group_size) } }, .{ "FMT", .{ .int = fmt } },  .{ "ROWS", .{ .int = bank_rows } },
++            .{ "GS", .{ .int = @intCast(L.gate_up.qp.group_size) } }, .{ "FMT", .{ .int = fmt } },  .{ "ROWS", .{ .int = up_rows } },
+             .{ "BITS", .{ .int = @intCast(L.gate_up.qp.bits) } },     .{ "S", .{ .dtype = ops.dtype(L.gate_up.s) } },
+             .{ "SCALED", gu_scaled },                                 .{ "KSEL", .{ .int = top_k } },
+         })
+     else blk: {
+         const gu = try layers.gather(g, pairs.rows, &L.gate_up, sel, sorted);
+         if (!floating(ops.dtype(gu))) return error.Inkling2StepDtype;
+-        break :blk .{try activation(g, gu, sel, gu_scale, caps, L.gate_up_scale.ctx != null)};
++        break :blk .{try activation(g, gu, sel, gu_scale, caps, L.gate_up_scale.ctx != null, dt)};
+     };
+ 
+-    // The down kernel's threadgroup holds every pick of its rows.
++    // Barrier-free downs_kernel: each SIMD group sweeps all KSEL experts across ROWS output columns.
++    const dn_rows: c_int = if (@rem(hidden, 4) == 0) 4 else if (@rem(hidden, 2) == 0) 2 else 1;
++    const dn_gy = @divExact(hidden, dn_rows);
++    const dn_bg: c_int = if (@rem(dn_gy, 8) == 0) 8 else if (@rem(dn_gy, 4) == 0) 4 else if (@rem(dn_gy, 2) == 0) 2 else 1;
+     const o = if (if ((s == 1 and 32 * top_k <= sure_threads) or few) packedFormat(&L.down, inter) else null) |fmt| blk: {
+-        const packed_out = try launchGrid(g, &downs_kernel, &.{ act[0], L.down.w, L.down.s, biasesOf(&L.down), sel, dn_scale, m.weights, m.residual, st, L.mlp_conv, conv_scale }, 2, .{ if (few) unused else tail_out[0], tail_out[1] }, .{ 32, top_k, s * @divExact(hidden, bank_rows) }, .{ 32, top_k, 1 }, &.{
++        const packed_out = try launchGrid(g, &downs_kernel, &.{ act[0], L.down.w, L.down.s, biasesOf(&L.down), sel, dn_scale, m.weights, m.residual, st, L.mlp_conv, conv_scale }, 2, .{ if (few) unused else tail_out[0], tail_out[1] }, .{ 32, dn_gy, s }, .{ 32, dn_bg, 1 }, &.{
+             .{ "T", .{ .dtype = dt } },         .{ "WT", .{ .dtype = ops.dtype(L.mlp_conv) } },        .{ "I", .{ .int = inter } },
+             .{ "D", .{ .int = hidden } },       .{ "GS", .{ .int = @intCast(L.down.qp.group_size) } }, .{ "FMT", .{ .int = fmt } },
+-            .{ "ROWS", .{ .int = bank_rows } }, .{ "KSEL", .{ .int = top_k } },                        .{ "KT", .{ .int = kt } },
++            .{ "ROWS", .{ .int = dn_rows } },   .{ "KSEL", .{ .int = top_k } },                        .{ "KT", .{ .int = kt } },
+             .{ "BITS", .{ .int = @intCast(L.down.qp.bits) } }, .{ "S", .{ .dtype = ops.dtype(L.down.s) } },
+             .{ "SCALED", dn_scaled },           .{ "TAIL", .{ .int = @intFromBool(!few) } },
+         });
+         if (!few) break :blk packed_out;
+         // The rows' MLP outputs are whole: the conv over them and the add, as the wide sum over one pick a row.
+         const rows_at = try g.arange(0, @floatFromInt(s), 1, .uint32);
+-        break :blk try pickSum(g, try g.reshape(packed_out[1], &.{ s, 1, hidden }), rows_at, rows_at, caps, try g.ones(&.{ 1, s, 1 }, .float32), m.residual, st, L.mlp_conv, conv_scale, 1, false);
++        break :blk try pickSum(g, try g.reshape(packed_out[1], &.{ s, 1, hidden }), rows_at, rows_at, caps, try g.ones(&.{ 1, s, 1 }, .float32), m.residual, st, L.mlp_conv, conv_scale, 1, false, dt);
+     } else blk: {
+         const dn = try layers.gather(g, act[0], &L.down, sel, sorted);
+         if (!floating(ops.dtype(dn))) return error.Inkling2StepDtype;
+         // Unsorted pairs sit in (row, pick) order already.
+         const inverse = pairs.inverse orelse try g.arange(0, @floatFromInt(n), 1, .uint32);
+-        break :blk try pickSum(g, dn, sel, inverse, dn_scale, m.weights, m.residual, st, L.mlp_conv, conv_scale, top_k, L.down_scale.ctx != null);
++        break :blk try pickSum(g, dn, sel, inverse, dn_scale, m.weights, m.residual, st, L.mlp_conv, conv_scale, top_k, L.down_scale.ctx != null, dt);
+     };
+     if (open) |v| {
+         v.window = try v.g.keep(try g.concat(&.{ st, try g.astype(try g.concat(&.{ kp, vp, m.op, o[1] }, 2), .float32) }, 1));
+@@ -993,10 +1198,12 @@ pub fn visit(c: *block.Ctx, L: *const Layer, w: *const Body, h: Array, blocks: ?
+     const total = @as(c_int, @intCast(c.offset())) + 1;
+     const one = c.rows == 1 and !batch;
+     const p = (try prep(g, L, cfg, &f.proj, f.dyn, st, if (one and L.global) layers.stepTau(cfg, total) else 1.0, if (one) keysSeen(L, cfg, total) else 0)) orelse return null;
+-    const fuse = one and open == null and oFormat(&L.o, ops.dtype(h)) != null;
+-    const read = if (batch) try attendSlots(c, L, cfg, &p, f.proj[3]) else try attend(c, L, cfg, &p, f.proj[3], open, fuse);
++    // On 4-bit L.o, MLX's quantized_matmul (qmv_fast, ~228 GB/s) is ~3x faster than oproj.metal (~77 GB/s),
++    // and qkvInk2 already fuses the output gate directly into qkv_ink2_verify_merge_kernel with zero extra launches.
++    const fuse = one and open == null and oFormat(&L.o, ops.dtype(h)) != null and !(L.o.s.ctx != null and L.o.bits == 4);
++    const read = if (batch) try attendSlots(c, L, cfg, &p, f.proj[3]) else try attend(c, L, w, &p, f.proj[3], open, fuse);
+     const m = try mid(g, L, w, read, if (fuse) p.gate else null, h, f.normed, blocks, st, f.messages);
+-    const t = try experts(g, L, cfg, &m, f.proj[4], f.proj[5], st, open);
++    const t = try expertsWith(g, L, cfg, w.c_caps, w.c_conv_scale, &m, f.proj[4], f.proj[5], st, open);
+     if (batch) try slot_state.put(c, .conv, t.state) else if (open == null) try kv.setState(c, .conv, t.state);
+     return .{ .h = t.h, .blocks = m.blocks };
+ }
+diff --git a/src/plugins/inkling2/kernels/bank_header.metal b/src/plugins/inkling2/kernels/bank_header.metal
+index c3aa2d1..62961a6 100644
+--- a/src/plugins/inkling2/kernels/bank_header.metal
++++ b/src/plugins/inkling2/kernels/bank_header.metal
+@@ -22,24 +22,44 @@ inline float msv_ink2_chunk(int fmt, const device uint* row, const device uchar*
+   return d * s * 4194304.0f;
+ }
+ 
+-// Chunk `c` (16 values) of one affine row against x: scale * sum(q x) + bias * sum(x) over the chunk's group. The row's
+-// BITS-bit values are one little-endian bit stream (MLX's packing at every width), so a chunk is BITS ushorts; `srow`
+-// and `brow` hold its group scales and biases (S).
++// Chunk `c` (16 values) of one affine row against x: scale * sum(q x) + bias * sum(x) over the chunk's group.
++// Fast paths for 4-bit (uint2) and 8-bit (uint4) avoid 64-bit shift loops on Apple GPUs.
+ template <typename S, int BITS, int GS>
+ inline float msv_ink2_affine_chunk(const device uchar* row, const device S* srow, const device S* brow, uint c, thread const float* x) {
++  const uint g = (c * 16) / GS;
++  float qx = 0.0f, sx = 0.0f;
++  if (BITS == 4) {
++    const device uint* p = (const device uint*)(row + c * 8);
++    const uint w0 = p[0];
++    const uint w1 = p[1];
++    qx += float(w0 & 15u) * x[0] + float((w0 >> 4) & 15u) * x[1] + float((w0 >> 8) & 15u) * x[2] + float((w0 >> 12) & 15u) * x[3];
++    qx += float((w0 >> 16) & 15u) * x[4] + float((w0 >> 20) & 15u) * x[5] + float((w0 >> 24) & 15u) * x[6] + float(w0 >> 28) * x[7];
++    qx += float(w1 & 15u) * x[8] + float((w1 >> 4) & 15u) * x[9] + float((w1 >> 8) & 15u) * x[10] + float((w1 >> 12) & 15u) * x[11];
++    qx += float((w1 >> 16) & 15u) * x[12] + float((w1 >> 20) & 15u) * x[13] + float((w1 >> 24) & 15u) * x[14] + float(w1 >> 28) * x[15];
++    sx = (x[0] + x[1] + x[2] + x[3]) + (x[4] + x[5] + x[6] + x[7]) + (x[8] + x[9] + x[10] + x[11]) + (x[12] + x[13] + x[14] + x[15]);
++    return float(srow[g]) * qx + float(brow[g]) * sx;
++  }
++  if (BITS == 8) {
++    const device uint* p = (const device uint*)(row + c * 16);
++    const uint w0 = p[0], w1 = p[1], w2 = p[2], w3 = p[3];
++    qx += float(w0 & 255u) * x[0] + float((w0 >> 8) & 255u) * x[1] + float((w0 >> 16) & 255u) * x[2] + float(w0 >> 24) * x[3];
++    qx += float(w1 & 255u) * x[4] + float((w1 >> 8) & 255u) * x[5] + float((w1 >> 16) & 255u) * x[6] + float(w1 >> 24) * x[7];
++    qx += float(w2 & 255u) * x[8] + float((w2 >> 8) & 255u) * x[9] + float((w2 >> 16) & 255u) * x[10] + float(w2 >> 24) * x[11];
++    qx += float(w3 & 255u) * x[12] + float((w3 >> 8) & 255u) * x[13] + float((w3 >> 16) & 255u) * x[14] + float(w3 >> 24) * x[15];
++    sx = (x[0] + x[1] + x[2] + x[3]) + (x[4] + x[5] + x[6] + x[7]) + (x[8] + x[9] + x[10] + x[11]) + (x[12] + x[13] + x[14] + x[15]);
++    return float(srow[g]) * qx + float(brow[g]) * sx;
++  }
+   const device ushort* p = (const device ushort*)(row + c * 2 * BITS);
+   ulong lo = 0, hi = 0;
+   for (int i = 0; i < BITS; ++i) {
+     const ulong v = ulong(p[i]);
+     if (16 * i < 64) lo |= v << (16 * i); else hi |= v << (16 * i - 64);
+   }
+-  float qx = 0.0f, sx = 0.0f;
+   for (int i = 0; i < 16; ++i) {
+     const int off = i * BITS;
+     const ulong w = off + BITS <= 64 ? lo >> off : (off >= 64 ? hi >> (off - 64) : ((lo >> off) | (hi << (64 - off))));
+     qx += float(w & ((1ul << BITS) - 1ul)) * x[i];
+     sx += x[i];
+   }
+-  const uint g = (c * 16) / GS;
+   return float(srow[g]) * qx + float(brow[g]) * sx;
+ }
+diff --git a/src/plugins/inkling2/kernels/downs.metal b/src/plugins/inkling2/kernels/downs.metal
+index becd932..fdfbe44 100644
+--- a/src/plugins/inkling2/kernels/downs.metal
++++ b/src/plugins/inkling2/kernels/downs.metal
+@@ -1,52 +1,67 @@
+-// Inkling 2, a few rows: the picked experts' down projections and their weighted sum in one launch, the packed
+-// bank read in place; with TAIL (one row) the MLP's short conv and the final add too. grid (32, KSEL, S * D / ROWS),
+-// threadgroup (32, KSEL, 1): a SIMD group owns ROWS output rows of one pick of one row (rows of WQ [E, D, I * bits /
+-// 32] u32, scales WS [E, D, I / GS] u8; FMT 3 an affine bank of BITS bits, scales WS and biases WB [E, D, I / GS] of S), a lane 16 values of ACT [S * KSEL, 1, I] (T) per sweep; the threadgroup
+-// holds every pick of those rows. Each pick's row sum is rounded to T as the bank's matmul leaves it, times
+-// SC[IDX[p]] with SCALED (f32 [E]) and its routing weight WTS[p] (f32); their sum in pick order, rounded to T, is
+-// the MLP's output XM [1, S, D]. TAIL: then the conv behind its window (the last D columns of ST [1, KT - 1, SW]
+-// f32) with MW [D, KT, 1] (WT), its sum rounded to WT as the conv op does, plus XM, times PR[0], rounded to T, and
+-// the residual RES [D] f32 added: HOUT [1, 1, D] (T), the visit's output stream.
++// Inkling 2, barrier-free down projections and weighted sum across all KSEL experts in one launch; with TAIL
++// (one row) the MLP's short conv and residual add too. grid (32, D / ROWS, S), threadgroup (32, BG, 1):
++// each SIMD group owns ROWS output columns of one token row and sweeps all KSEL * (I / 16) chunks with zero
++// threadgroup barriers and zero idle SIMD lanes (8 * 72 = 576 = 18 * 32 on Inkling-2-Mini).
+ const uint lane = thread_index_in_simdgroup;
+-const uint e = thread_position_in_grid.y;
+-const uint srow = thread_position_in_grid.z / (D / ROWS);
+-const uint row0 = (thread_position_in_grid.z % (D / ROWS)) * ROWS;
+-const uint p = srow * KSEL + e;
++const uint row0 = thread_position_in_grid.y * ROWS;
++const uint srow = thread_position_in_grid.z;
+ constexpr uint WPR = FMT == 2 ? I / 4 : I / 8;
+ constexpr uint WBR = I * BITS / 8;
+ constexpr uint SPR = I / GS;
++constexpr uint NC = I / 16;
++constexpr uint TOT = KSEL * NC;
+ const uint SW = ST_shape[2];
+ const uint OFF = SW - D;
+-threadgroup float part[KSEL * ROWS];
+-const size_t base = size_t(IDX[p]) * D + row0;
+-const device uint* wrow = WQ + base * WPR;
+-const device uchar* scales = (const device uchar*)WS + base * SPR;
+-const device uchar* arow = (const device uchar*)WQ + base * WBR;
+-const device S* sa = (const device S*)WS + base * SPR;
+-const device S* ba = (const device S*)WB + base * SPR;
+ float acc[ROWS];
+ for (uint r = 0; r < ROWS; r++) acc[r] = 0.0f;
+-for (uint k = lane * 16; k < I; k += 512) {
++uint ex_cache[KSEL];
++float sc_cache[KSEL];
++for (uint e = 0; e < KSEL; e++) {
++    const uint p = srow * KSEL + e;
++    const uint ex = IDX[p];
++    ex_cache[e] = ex;
++    sc_cache[e] = (SCALED ? SC[ex] : 1.0f) * WTS[p];
++}
++for (uint idx = lane; idx < TOT; idx += 32) {
++    const uint e = idx / NC;
++    const uint c = idx % NC;
++    const uint p = srow * KSEL + e;
++    const uint ex = ex_cache[e];
++    const float ws = sc_cache[e];
++    const device vec<T, 4>* xp = (const device vec<T, 4>*)(ACT + size_t(p) * I + c * 16);
+     float xr[16];
+-    for (uint i = 0; i < 16; i++) xr[i] = float(ACT[size_t(p) * I + k + i]);
+-    for (uint r = 0; r < ROWS; r++)
+-        acc[r] += FMT == 3 ? msv_ink2_affine_chunk<S, BITS, GS>(arow + r * WBR, sa + r * SPR, ba + r * SPR, k / 16, xr)
+-                           : msv_ink2_chunk(FMT, wrow + r * WPR, scales + r * SPR, k / 16, xr);
++    for (uint v = 0; v < 4; v++) {
++        const vec<T, 4> x4 = xp[v];
++        xr[4 * v + 0] = float(x4[0]);
++        xr[4 * v + 1] = float(x4[1]);
++        xr[4 * v + 2] = float(x4[2]);
++        xr[4 * v + 3] = float(x4[3]);
++    }
++    const size_t base = size_t(ex) * D + row0;
++    if (FMT == 3) {
++        const device uchar* arow = (const device uchar*)WQ + base * WBR;
++        const device S* sa = (const device S*)WS + base * SPR;
++        const device S* ba = (const device S*)WB + base * SPR;
++        for (uint r = 0; r < ROWS; r++)
++            acc[r] += msv_ink2_affine_chunk<S, BITS, GS>(arow + r * WBR, sa + r * SPR, ba + r * SPR, c, xr) * ws;
++    } else {
++        const device uint* wrow = WQ + base * WPR;
++        const device uchar* scales = (const device uchar*)WS + base * SPR;
++        for (uint r = 0; r < ROWS; r++)
++            acc[r] += msv_ink2_chunk(FMT, wrow + r * WPR, scales + r * SPR, c, xr) * ws;
++    }
+ }
+ for (uint r = 0; r < ROWS; r++) {
+-    const float v = float(T(simd_sum(acc[r]))) * (SCALED ? SC[IDX[p]] : 1.0f) * WTS[p];
+-    if (lane == 0) part[e * ROWS + r] = v;
+-}
+-threadgroup_barrier(mem_flags::mem_threadgroup);
+-if (e == 0 && lane < ROWS) {
+-    const uint c = row0 + lane;
+-    float x = 0.0f;
+-    for (uint k = 0; k < KSEL; k++) x += part[k * ROWS + lane];
+-    const T xm = T(x);
+-    XM[size_t(srow) * D + c] = xm;
+-    if (!TAIL) return;
+-    float y = 0.0f;
+-    for (uint j = 0; j < KT; j++) y += ((j + 1 < KT) ? ST[j * SW + OFF + c] : float(xm)) * float(MW[c * KT + j]);
+-    y = float(WT(y));
+-    HOUT[c] = T(RES[c] + float(T((y + float(xm)) * PR[0])));
++    const float x = simd_sum(acc[r]);
++    if (lane == r) {
++        const uint col = row0 + r;
++        const T xm = T(x);
++        XM[size_t(srow) * D + col] = xm;
++        if (TAIL) {
++            float y = 0.0f;
++            for (uint j = 0; j < KT; j++) y += ((j + 1 < KT) ? ST[j * SW + OFF + col] : float(xm)) * float(MW[col * KT + j]);
++            y = float(WT(y));
++            HOUT[col] = T(RES[col] + float(T((y + float(xm)) * PR[0])));
++        }
++    }
+ }
+diff --git a/src/plugins/inkling2/kernels/gate.metal b/src/plugins/inkling2/kernels/gate.metal
+index a13eba6..7834cc8 100644
+--- a/src/plugins/inkling2/kernels/gate.metal
++++ b/src/plugins/inkling2/kernels/gate.metal
+@@ -1,18 +1,31 @@
+-// Inkling 2: J loop message gates over S rows, one thread per element. A [J, S, D] f32 are the gated streams, MS
+-// [J, S, D] f32 their messages, ST [J, S, RANK] each gate's state (the down projection of both norms). F and G are
+-// the forget and message projections [J, D, RANK] (their stored float dtype, read as f32), or with PROJ their
+-// products with the states [J, S, D] f32 (a prompt's rows take them from a matmul).
++// Inkling 2: J loop message gates over S rows, one thread per element.
++// When TRANS == 1 and PROJ == 0, F and G are laid out [J, RANK, D] for 100% coalesced reads
++// across threads in a threadgroup, with ST[RANK] staged once in threadgroup SRAM.
+ // Y [J, S, D] f32 = (1 - tanh(F st)) A + tanh(G st) MS.
+-const uint e = thread_position_in_grid.x;
++const uint i = thread_position_in_grid.x;
++const uint row = thread_position_in_grid.y;
++const uint j = thread_position_in_grid.z;
++const uint t = thread_position_in_threadgroup.x;
+ const uint S = ST_shape[1];
++const uint e = (j * S + row) * D + i;
+ float f = 0.0f, g = 0.0f;
+ if (PROJ) {
+     f = F[e];
+     g = G[e];
++} else if (TRANS) {
++    threadgroup float st_tg[RANK];
++    for (uint r = t; r < RANK; r += TG) {
++        st_tg[r] = float(ST[(j * S + row) * RANK + r]);
++    }
++    threadgroup_barrier(mem_flags::mem_threadgroup);
++    const device GT* fp = F + size_t(j * RANK) * D + i;
++    const device GT* gp = G + size_t(j * RANK) * D + i;
++    for (uint r = 0; r < RANK; r++) {
++        const float s = st_tg[r];
++        f += float(fp[size_t(r) * D]) * s;
++        g += float(gp[size_t(r) * D]) * s;
++    }
+ } else {
+-    const uint j = e / (S * D);
+-    const uint row = (e / D) % S;
+-    const uint i = e % D;
+     for (uint r = 0; r < RANK; r++) {
+         const float s = float(ST[(j * S + row) * RANK + r]);
+         f += float(F[(j * D + i) * RANK + r]) * s;
+diff --git a/src/plugins/inkling2/kernels/markov_fold.metal b/src/plugins/inkling2/kernels/markov_fold.metal
+index 1258677..1412f25 100644
+--- a/src/plugins/inkling2/kernels/markov_fold.metal
++++ b/src/plugins/inkling2/kernels/markov_fold.metal
+@@ -15,14 +15,27 @@ const uint lane = thread_index_in_simdgroup;
+ const uint sg = t / 32;
+ const uint V = FOLD_shape[1];
+ const size_t at = size_t(AT[0]);
+-for (uint r = t; r < R; r += TG) lat[r] = float(T(metal::precise::tanh(P[2 * R + r])));
++for (uint r = t; r < R; r += TG) lat[r] = float(T(metal::precise::tanh(P[2 * R + r]))) * (Q8 ? FSCALE[r] : 1.0f);
+ threadgroup_barrier(mem_flags::mem_threadgroup);
+ const uint v0 = (tg * TG + t) * VPT;
+ float acc[VPT];
+ for (uint j = 0; j < VPT; j++) acc[j] = 0.0f;
+-if (v0 < VOCAB) for (uint r = 0; r < R; r++) {
+-    const vec<T, VPT> f = *(const device vec<T, VPT>*)(FOLD + size_t(r) * V + v0);
+-    for (uint j = 0; j < VPT; j++) acc[j] += lat[r] * float(f[j]);
++if (v0 < VOCAB) {
++    if (Q8) {
++        const device char* fq = (const device char*)FOLD;
++        for (uint r = 0; r < R; r++) {
++            const vec<char, VPT> f = *(const device vec<char, VPT>*)(fq + size_t(r) * V + v0);
++            const float lr = lat[r];
++            for (uint j = 0; j < VPT; j++) acc[j] += lr * float(f[j]);
++        }
++    } else {
++        const device T* ft = (const device T*)FOLD;
++        for (uint r = 0; r < R; r++) {
++            const vec<T, VPT> f = *(const device vec<T, VPT>*)(ft + size_t(r) * V + v0);
++            const float lr = lat[r];
++            for (uint j = 0; j < VPT; j++) acc[j] += lr * float(f[j]);
++        }
++    }
+ }
+ float lg[VPT];
+ float m = -INFINITY;
+diff --git a/src/plugins/inkling2/kernels/oproj.metal b/src/plugins/inkling2/kernels/oproj.metal
+index c581b66..07cd3fe 100644
+--- a/src/plugins/inkling2/kernels/oproj.metal
++++ b/src/plugins/inkling2/kernels/oproj.metal
+@@ -1,26 +1,44 @@
+ // Inkling 2, one row: the attention read ATT [H * HD] (T) times its output gate GATE [H * HD] f32, rounded to T as
+ // `gated` leaves it, then the output projection Y [1, 1, N] (T): an affine weight (FMT 3: BITS-bit rows of WQ in MLX's
+-// packing, group GS scales WS and biases WB of S) or a dense [N, K] weight of T (FMT 4). grid (32, N, 1), threadgroup
+-// (32, SGS, 1): a SIMD group owns one output row, a lane 16 inputs a sweep.
++// packing, group GS scales WS and biases WB of S) or a dense [N, K] weight of T (FMT 4). grid (32, N / ROWS, 1),
++// threadgroup (32, SGS, 1): a SIMD group owns ROWS output rows, reusing xr[16] across them.
+ const uint lane = thread_index_in_simdgroup;
+-const uint n = thread_position_in_grid.y;
++const uint n0 = thread_position_in_grid.y * ROWS;
+ constexpr uint WBR = K * BITS / 8;
+ constexpr uint SPR = K / GS;
+-const device uchar* arow = (const device uchar*)WQ + size_t(n) * WBR;
+-const device S* sa = (const device S*)WS + size_t(n) * SPR;
+-const device S* ba = (const device S*)WB + size_t(n) * SPR;
+-const device T* drow = (const device T*)WQ + size_t(n) * K;
+-float acc = 0.0f;
++const device uchar* arow = (const device uchar*)WQ + size_t(n0) * WBR;
++const device S* sa = (const device S*)WS + size_t(n0) * SPR;
++const device S* ba = (const device S*)WB + size_t(n0) * SPR;
++const device T* drow = (const device T*)WQ + size_t(n0) * K;
++float acc[ROWS];
++for (uint r = 0; r < ROWS; r++) acc[r] = 0.0f;
+ for (uint c = lane; c < K / 16; c += 32) {
+   float xr[16];
+-  for (uint i = 0; i < 16; i++) xr[i] = float(T(float(ATT[c * 16 + i]) * GATE[c * 16 + i]));
+-  if (FMT == 3) {
+-    acc += msv_ink2_affine_chunk<S, BITS, GS>(arow, sa, ba, c, xr);
+-  } else {
+-    float d = 0.0f;
+-    for (uint i = 0; i < 16; i++) d += float(drow[c * 16 + i]) * xr[i];
+-    acc += d;
++  const device vec<T, 4>* ap = (const device vec<T, 4>*)(ATT + c * 16);
++  const device float4* gp = (const device float4*)(GATE + c * 16);
++  for (uint v = 0; v < 4; v++) {
++    const vec<T, 4> a4 = ap[v];
++    const float4 g4 = gp[v];
++    xr[4 * v + 0] = float(T(float(a4[0]) * g4.x));
++    xr[4 * v + 1] = float(T(float(a4[1]) * g4.y));
++    xr[4 * v + 2] = float(T(float(a4[2]) * g4.z));
++    xr[4 * v + 3] = float(T(float(a4[3]) * g4.w));
++  }
++  for (uint r = 0; r < ROWS; r++) {
++    if (FMT == 3) {
++      acc[r] += msv_ink2_affine_chunk<S, BITS, GS>(arow + r * WBR, sa + r * SPR, ba + r * SPR, c, xr);
++    } else {
++      const device vec<T, 4>* dp = (const device vec<T, 4>*)(drow + r * K + c * 16);
++      float d = 0.0f;
++      for (uint v = 0; v < 4; v++) {
++        const vec<T, 4> w4 = dp[v];
++        d += float(w4[0]) * xr[4 * v + 0] + float(w4[1]) * xr[4 * v + 1] + float(w4[2]) * xr[4 * v + 2] + float(w4[3]) * xr[4 * v + 3];
++      }
++      acc[r] += d;
++    }
+   }
+ }
+-const float v = simd_sum(acc);
+-if (lane == 0) Y[n] = T(v);
++for (uint r = 0; r < ROWS; r++) {
++  const float v = simd_sum(acc[r]);
++  if (lane == r) Y[n0 + r] = T(v);
++}
+diff --git a/src/plugins/inkling2/kernels/prep.metal b/src/plugins/inkling2/kernels/prep.metal
+index 3b8120b..4ef8f6b 100644
+--- a/src/plugins/inkling2/kernels/prep.metal
++++ b/src/plugins/inkling2/kernels/prep.metal
+@@ -1,33 +1,28 @@
+ // Inkling 2: what the attention read needs from a visit's projections for S rows. grid (H * HD + 2 * HKV * HD + the
+-// tail, S), threadgroup (HD, 1): one thread per output element of a row, a head of q, k or v one threadgroup whose
+-// threads each square their own element into BUF for the group to sum, so no thread loops over a head's inputs.
+-// QP, GP [1, S, H * HD], RP [1, S, H * DREL], KP, VP [1, S, HKV * HD] are the q, gate, relative, k and v projections
+-// (T); the k and v convs run over the rows behind the windows before them (ST [1, KT - 1, >= 2 * HKV * HD] f32, k
+-// then v), or with SEQ 0 each row behind its own window (ST [S, KT - 1, .]: the rows are sequences of their own). Static convs take KW, VW [C, KT, 1] (WT) and round their sum to WT as the conv op does; dynamic ones (DYN)
+-// take KW, VW [KT, C] (WT) plus each head's projected taps KDY, VDY [1, S, HKV * KT] (T), tap `lag` on the input
+-// `lag` rows back. QS [H, HD] and RS [H, DREL] (S) scale q and the relative states before their L2 clips.
+-// PR = { qk clip, rel clip, eps, tau, conv scale, KV }.
+-// Q [1, S, H, HD] T (clipped, times tau), GATE [S * H * HD] f32 (sigmoid), K, V [1, HKV, S, HD] T (conv, then the L2
+-// clip or the unweighted RMS norm). The tail is, WIDE: REL [1, S, H, DREL] T, the clipped relative states; else (one
+-// row): BIAS [1, H, 1, KV] T, the row's additive bias over its KV keys, the newest last (the clipped states through
+-// RJ [DREL, R] f32, distance 0 last, times tau; zero for a key past the extent R).
++// tail, S), threadgroup (HD, 1): one thread per output element of a row, a head of q, k or v one threadgroup.
++// Optimized: uses simd_sum + 4-slot shared reduction instead of 128-iter loop, and early-outs zero BIAS columns
++// before computing DREL norms.
+ const uint i = thread_position_in_grid.x;
+ const uint row = thread_position_in_grid.y;
+ const uint t = thread_position_in_threadgroup.x;
++const uint lane = thread_index_in_simdgroup;
++const uint sg = t / 32;
++constexpr uint NSG = (HD + 31) / 32;
+ const uint ROWS = QP_shape[1];
+ const uint QD = H * HD;
+ const uint C = HKV * HD;
+ const uint R = RJ_shape[1];
+ const uint SW = ST_shape[2];
+ const float qk_thr = PR[0], rel_thr = PR[1], eps = PR[2], tau = PR[3], cs = PR[4];
+-threadgroup float buf[HD];
++threadgroup float sbuf[NSG];
+ if (i < QD) {
+     const uint at = row * QD + i;
+     const float mine = float(QP[at]) * float(QS[i]);
+-    buf[t] = mine * mine;
++    float sg_sum = simd_sum(mine * mine);
++    if (lane == 0) sbuf[sg] = sg_sum;
+     threadgroup_barrier(mem_flags::mem_threadgroup);
+     float n2 = 0.0f;
+-    for (uint j = 0; j < HD; j++) n2 += buf[j];
++    for (uint g = 0; g < NSG; g++) n2 += sbuf[g];
+     const float f = min(qk_thr / (sqrt(n2) + 1e-6f), 1.0f);
+     T q = T(mine * f);
+     if (tau != 1.0f) q = T(float(q) * tau);
+@@ -44,7 +39,6 @@ if (r < 2 * C) {
+     const float x = float(is_v ? VP[row * C + c] : KP[row * C + c]);
+     float y = 0.0f;
+     for (uint j = 0; j < KT; j++) {
+-        // Tap j reads row `row + j` of [ST | the rows]; SEQ 0: tap j of [the row's own ST | the row].
+         float wv = x;
+         if (SEQ ? row + j < KT - 1 : j + 1 < KT) wv = ST[(SEQ ? row + j : row * (KT - 1) + j) * SW + off + c];
+         else if (j + 1 < KT) wv = float(is_v ? VP[(row + j - (KT - 1)) * C + c] : KP[(row + j - (KT - 1)) * C + c]);
+@@ -60,18 +54,39 @@ if (r < 2 * C) {
+     }
+     if (!DYN) y = float(WT(y));
+     const float mine = float(T((y + x) * cs));
+-    buf[t] = mine * mine;
++    float sg_sum = simd_sum(mine * mine);
++    if (lane == 0) sbuf[sg] = sg_sum;
+     threadgroup_barrier(mem_flags::mem_threadgroup);
+     float n2 = 0.0f;
+-    for (uint j = 0; j < HD; j++) n2 += buf[j];
++    for (uint g = 0; g < NSG; g++) n2 += sbuf[g];
+     const uint at = (h * ROWS + row) * HD + c % HD;
+     if (is_v) V[at] = T(mine * rsqrt(n2 / float(HD) + eps));
+     else K[at] = T(mine * min(qk_thr / (sqrt(n2) + 1e-6f), 1.0f));
+     return;
+ }
+ r -= 2 * C;
+-// A head's relative states, clipped.
+-const uint h = WIDE ? r / DREL : r / uint(PR[5]);
++if (!WIDE) {
++    const uint KV = uint(PR[5]);
++    const uint col = r % KV;
++    if (col + R < KV) {
++        BIAS[r] = T(0.0f);
++        return;
++    }
++    const uint h = r / KV;
++    const uint rp = row * H * DREL + h * DREL;
++    float n2 = 0.0f;
++    for (uint j = 0; j < DREL; j++) {
++        const float v = float(RP[rp + j]) * float(RS[h * DREL + j]);
++        n2 += v * v;
++    }
++    const float f = min(rel_thr / (sqrt(n2) + 1e-6f), 1.0f);
++    const uint d = col + R - KV;
++    float acc = 0.0f;
++    for (uint j = 0; j < DREL; j++) acc += float(T(float(RP[rp + j]) * float(RS[h * DREL + j]) * f)) * RJ[j * R + d];
++    BIAS[r] = T(acc * tau);
++    return;
++}
++const uint h = r / DREL;
+ const uint rp = row * H * DREL + h * DREL;
+ float n2 = 0.0f;
+ for (uint j = 0; j < DREL; j++) {
+@@ -79,19 +94,5 @@ for (uint j = 0; j < DREL; j++) {
+     n2 += v * v;
+ }
+ const float f = min(rel_thr / (sqrt(n2) + 1e-6f), 1.0f);
+-if (WIDE) {
+-    const uint j = r % DREL;
+-    REL[rp + j] = T(float(RP[rp + j]) * float(RS[h * DREL + j]) * f);
+-    return;
+-}
+-const uint KV = uint(PR[5]);
+-const uint col = r % KV;
+-// Key `col` sits R - KV + col columns into the logits.
+-if (col + R < KV) {
+-    BIAS[r] = T(0.0f);
+-    return;
+-}
+-const uint d = col + R - KV;
+-float acc = 0.0f;
+-for (uint j = 0; j < DREL; j++) acc += float(T(float(RP[rp + j]) * float(RS[h * DREL + j]) * f)) * RJ[j * R + d];
+-BIAS[r] = T(acc * tau);
++const uint j = r % DREL;
++REL[rp + j] = T(float(RP[rp + j]) * float(RS[h * DREL + j]) * f);
+diff --git a/src/plugins/inkling2/kernels/qkv_ink2.metal b/src/plugins/inkling2/kernels/qkv_ink2.metal
+new file mode 100644
+index 0000000..f95a9e6
+--- /dev/null
++++ b/src/plugins/inkling2/kernels/qkv_ink2.metal
+@@ -0,0 +1,187 @@
++#define UNR _Pragma("clang loop unroll(full)")
++constexpr int VPW = 32 / BITS;
++constexpr int NHT = (GQA + 7) / 8;
++constexpr int NDK = DK / 8;
++constexpr int NDV = DV / 8;
++constexpr int NSG = 4;
++constexpr int QTG = NHT * 8 * DK;
++constexpr int TGF = QTG > 8 * DV ? QTG : 8 * DV;
++const uint tid = thread_position_in_threadgroup.x;
++const ushort lane = ushort(tid % 32);
++const uint sg = tid / 32;
++const uint hkv = threadgroup_position_in_grid.y;
++const uint split = threadgroup_position_in_grid.z;
++const uint nsplit = threadgroups_per_grid.z;
++const int Tk = tk[0];
++const int B = bias_shape[3];
++const float scale = scl[0];
++const uint mask_bits = (1u << BITS) - 1u;
++const int per = ((Tk + int(nsplit * NSG) - 1) / int(nsplit * NSG) + 7) / 8 * 8;
++const int s0 = int(split * NSG + sg) * per;
++const int s1 = min(Tk, s0 + per);
++
++const ushort qid = lane / 4;
++const ushort fm = (qid & 4) + ((lane / 2) % 4);
++const ushort fn = (qid & 2) * 2 + (lane % 2) * 2;
++
++threadgroup float tg[TGF];
++threadgroup float ml_tg[2 * NSG * NHT * 8];
++for (int i = int(tid); i < QTG; i += NSG * 32) {
++  const int head = i / DK, e = i % DK;
++  tg[i] = head < GQA ? float(q[((long)hkv * GQA + head) * (long)q_strides[1] + e]) * scale : 0.0f;
++}
++threadgroup_barrier(mem_flags::mem_threadgroup);
++
++simdgroup_float8x8 O[NHT][NDV];
++float m[NHT], mt[NHT], l[NHT];
++UNR for (int h = 0; h < NHT; ++h) {
++  m[h] = -1e30f; mt[h] = -1e30f; l[h] = 0.0f;
++  UNR for (int j = 0; j < NDV; ++j) O[h][j] = simdgroup_float8x8(0.0f);
++}
++const device uint* kqh = kq + (long)hkv * (long)kq_strides[1];
++const device T* ksh = ksc + (long)hkv * (long)ksc_strides[1];
++const device T* kbh = kbi + (long)hkv * (long)kbi_strides[1];
++const device uint* vqh = vq + (long)hkv * (long)vq_strides[1];
++const device T* vsh = vsc + (long)hkv * (long)vsc_strides[1];
++const device T* vbh = vbi + (long)hkv * (long)vbi_strides[1];
++const long kqs = kq_strides[2], kss = ksc_strides[2], kbs = kbi_strides[2];
++const long vqs = vq_strides[2], vss = vsc_strides[2], vbs = vbi_strides[2];
++
++for (int t0 = s0; t0 < s1; t0 += 8) {
++  const int ra = t0 + fn, rb = ra + 1;
++  const bool a_ok = ra < s1, b_ok = rb < s1;
++  const long rka = (long)min(ra, Tk - 1), rkb = (long)min(rb, Tk - 1);
++  simdgroup_float8x8 S[NHT];
++  UNR for (int h = 0; h < NHT; ++h) S[h] = simdgroup_float8x8(0.0f);
++  {
++    const device uint4* ka4 = (const device uint4*)(kqh + rka * kqs);
++    const device uint4* kb4 = (const device uint4*)(kqh + rkb * kqs);
++    float ksa[DK / GS], kba[DK / GS], ksb[DK / GS], kbb[DK / GS];
++    UNR for (int g = 0; g < DK / GS; ++g) {
++      ksa[g] = float(ksh[rka * kss + g]); kba[g] = float(kbh[rka * kbs + g]);
++      ksb[g] = float(ksh[rkb * kss + g]); kbb[g] = float(kbh[rkb * kbs + g]);
++    }
++    UNR for (int w4 = 0; w4 < DK / VPW / 4; ++w4) {
++      const uint4 WA = ka4[w4], WB = kb4[w4];
++      UNR for (int u = 0; u < 4 * VPW / 8; ++u) {
++        const int j = w4 * (4 * VPW / 8) + u;
++        const int d = 8 * j + fm;
++        const int wl = (d / VPW) % 4;
++        const int sh = (d % VPW) * BITS;
++        const int g = (8 * j) / GS;
++        simdgroup_float8x8 kt;
++        kt.thread_elements()[0] = float((WA[wl] >> sh) & mask_bits) * ksa[g] + kba[g];
++        kt.thread_elements()[1] = float((WB[wl] >> sh) & mask_bits) * ksb[g] + kbb[g];
++        UNR for (int h = 0; h < NHT; ++h) {
++          simdgroup_float8x8 qa;
++          simdgroup_load(qa, tg + 8 * h * DK + 8 * j, DK);
++          simdgroup_multiply_accumulate(S[h], qa, kt, S[h]);
++        }
++      }
++    }
++  }
++  const int da = Tk - 1 - ra;
++  const int db = Tk - 1 - rb;
++  simdgroup_float8x8 P[NHT];
++  UNR for (int h = 0; h < NHT; ++h) {
++    const int head_local = int(fm) + 8 * h;
++    const long hq = (long)hkv * GQA + head_local;
++    float x0 = S[h].thread_elements()[0], x1 = S[h].thread_elements()[1];
++    if (head_local < GQA) {
++      if (a_ok && da < B) x0 += float(bias[hq * (long)B + (long)(B - 1 - da)]);
++      if (b_ok && db < B) x1 += float(bias[hq * (long)B + (long)(B - 1 - db)]);
++    }
++    x0 = a_ok ? x0 : -INFINITY; x1 = b_ok ? x1 : -INFINITY;
++    float mx = max(x0, x1);
++    mx = max(mx, simd_shuffle_xor(mx, 1));
++    mx = max(mx, simd_shuffle_xor(mx, 8));
++    mt[h] = max(mt[h], mx);
++    if (simd_any(mx > m[h] + 8.0f)) {
++      const float mn = max(m[h], mx);
++      const float c = metal::exp(m[h] - mn);
++      l[h] *= c; m[h] = mn;
++      UNR for (int j = 0; j < NDV; ++j) { O[h][j].thread_elements()[0] *= c; O[h][j].thread_elements()[1] *= c; }
++    }
++    const float p0 = metal::exp(x0 - m[h]), p1 = metal::exp(x1 - m[h]);
++    float ps = p0 + p1;
++    ps += simd_shuffle_xor(ps, 1);
++    ps += simd_shuffle_xor(ps, 8);
++    l[h] += ps;
++    P[h].thread_elements()[0] = p0; P[h].thread_elements()[1] = p1;
++  }
++  {
++    const int rv = t0 + fm;
++    const long rvc = (long)min(rv, Tk - 1);
++    const bool rv_ok = rv < s1;
++    const device uint4* v4p = (const device uint4*)(vqh + rvc * vqs);
++    float svs[DV / GS], bvs[DV / GS];
++    UNR for (int g = 0; g < DV / GS; ++g) {
++      svs[g] = rv_ok ? float(vsh[rvc * vss + g]) : 0.0f;
++      bvs[g] = rv_ok ? float(vbh[rvc * vbs + g]) : 0.0f;
++    }
++    UNR for (int w4 = 0; w4 < DV / VPW / 4; ++w4) {
++      const uint4 W = v4p[w4];
++      UNR for (int u = 0; u < 4 * VPW / 8; ++u) {
++        const int j = w4 * (4 * VPW / 8) + u;
++        const int e = 8 * j + fn;
++        const int wl = (e / VPW) % 4;
++        const int sh = (e % VPW) * BITS;
++        const int g = (8 * j) / GS;
++        simdgroup_float8x8 vt;
++        vt.thread_elements()[0] = float((W[wl] >> sh) & mask_bits) * svs[g] + bvs[g];
++        vt.thread_elements()[1] = float((W[wl] >> (sh + BITS)) & mask_bits) * svs[g] + bvs[g];
++        UNR for (int h = 0; h < NHT; ++h) simdgroup_multiply_accumulate(O[h][j], P[h], vt, O[h][j]);
++      }
++    }
++  }
++}
++
++if (fn == 0 && (lane & 8) == 0) {
++  UNR for (int h = 0; h < NHT; ++h) { ml_tg[(sg * NHT + h) * 8 + fm] = mt[h]; }
++}
++threadgroup_barrier(mem_flags::mem_threadgroup);
++float M[NHT], L[NHT];
++UNR for (int h = 0; h < NHT; ++h) {
++  float mm = -1e30f;
++  UNR for (int k = 0; k < NSG; ++k) mm = max(mm, ml_tg[(k * NHT + h) * 8 + fm]);
++  M[h] = mm;
++  const float c = metal::exp(m[h] - mm);
++  l[h] *= c;
++  UNR for (int j = 0; j < NDV; ++j) { O[h][j].thread_elements()[0] *= c; O[h][j].thread_elements()[1] *= c; }
++}
++threadgroup_barrier(mem_flags::mem_threadgroup);
++if (fn == 0 && (lane & 8) == 0) {
++  UNR for (int h = 0; h < NHT; ++h) ml_tg[((NSG + sg) * NHT + h) * 8 + fm] = l[h];
++}
++threadgroup_barrier(mem_flags::mem_threadgroup);
++UNR for (int h = 0; h < NHT; ++h) {
++  float ll = 0.0f;
++  UNR for (int k = 0; k < NSG; ++k) ll += ml_tg[((NSG + k) * NHT + h) * 8 + fm];
++  L[h] = ll;
++  for (uint k = 1; k < NSG; ++k) {
++    if (sg == k) { UNR for (int j = 0; j < NDV; ++j) simdgroup_store(O[h][j], tg + 8 * j, DV); }
++    threadgroup_barrier(mem_flags::mem_threadgroup);
++    if (sg == 0) {
++      UNR for (int j = 0; j < NDV; ++j) {
++        simdgroup_float8x8 t;
++        simdgroup_load(t, tg + 8 * j, DV);
++        O[h][j].thread_elements()[0] += t.thread_elements()[0];
++        O[h][j].thread_elements()[1] += t.thread_elements()[1];
++      }
++    }
++    threadgroup_barrier(mem_flags::mem_threadgroup);
++  }
++}
++if (sg == 0) {
++  UNR for (int h = 0; h < NHT; ++h) {
++    const int head = fm + 8 * h;
++    if (head < GQA) {
++      const long slot = ((long)hkv * GQA + head) * (long)nsplit + (long)split;
++      if (fn == 0) { m_out[slot] = M[h]; l_out[slot] = L[h]; }
++      UNR for (int j = 0; j < NDV; ++j) {
++        o_out[slot * DV + 8 * j + fn] = O[h][j].thread_elements()[0];
++        o_out[slot * DV + 8 * j + fn + 1] = O[h][j].thread_elements()[1];
++      }
++    }
++  }
++}
+diff --git a/src/plugins/inkling2/kernels/qkv_ink2_merge.metal b/src/plugins/inkling2/kernels/qkv_ink2_merge.metal
+new file mode 100644
+index 0000000..f45efde
+--- /dev/null
++++ b/src/plugins/inkling2/kernels/qkv_ink2_merge.metal
+@@ -0,0 +1,15 @@
++const uint e = thread_position_in_threadgroup.x;
++const uint row = threadgroup_position_in_grid.y;
++const auto mr = m_in + (long)row * NS;
++const auto lr = l_in + (long)row * NS;
++const float sk = float(sinks[row]);
++float M = sk;
++for (int i = 0; i < NS; ++i) M = max(M, mr[i]);
++float L = metal::exp(sk - M), acc = 0.0f;
++const auto orow = o_in + (long)row * NS * DV + e;
++for (int i = 0; i < NS; ++i) {
++  const float w = metal::exp(mr[i] - M);
++  L += lr[i] * w;
++  acc += orow[(long)i * DV] * w;
++}
++out[(long)row * DV + e] = T(acc / L);
+diff --git a/src/plugins/inkling2/kernels/qkv_ink2_verify.metal b/src/plugins/inkling2/kernels/qkv_ink2_verify.metal
+new file mode 100644
+index 0000000..e1470e6
+--- /dev/null
++++ b/src/plugins/inkling2/kernels/qkv_ink2_verify.metal
+@@ -0,0 +1,282 @@
++#define UNR _Pragma("clang loop unroll(full)")
++// Inkling 2 verify (S = 2..5 rows) directly over Q4/Q8 KV cache + S tiny FP16 candidate rows (k_new, v_new).
++// Zero KV dequantization, zero concat copy, reads Q4 KV ONCE for all S * GQA query rows simultaneously!
++// q: [1, HQ, S, DK] (non-contiguous ok), kq/vq: [1, HKV, Tk_old, DK/VPW] u32,
++// k_new/v_new: [1, HKV, S, DK] (T), rel: [1, S, HQ, R] (T).
++constexpr int VPW = 32 / BITS;
++constexpr int M = SROWS * GQA;
++constexpr int NHT = (M + 7) / 8;
++constexpr int NDK = DK / 8;
++constexpr int NDV = DV / 8;
++constexpr int NSG = 4;
++constexpr int QTG = NHT * 8 * DK;
++constexpr int TGF = QTG > 8 * DV ? QTG : 8 * DV;
++const uint tid = thread_position_in_threadgroup.x;
++const ushort lane = ushort(tid % 32);
++const uint sg = tid / 32;
++const uint hkv = threadgroup_position_in_grid.y;
++const uint split = threadgroup_position_in_grid.z;
++const uint nsplit = threadgroups_per_grid.z;
++const int Tk = tk[0];
++const float scale = scl[0];
++const uint mask_bits = (1u << BITS) - 1u;
++const int per = Tk > 0 ? (((Tk + int(nsplit * NSG) - 1) / int(nsplit * NSG) + 7) / 8 * 8) : 0;
++const int s0 = int(split * NSG + sg) * per;
++const int s1 = min(Tk, s0 + per);
++
++const ushort qid = lane / 4;
++const ushort fm = (qid & 4) + ((lane / 2) % 4);
++const ushort fn = (qid & 2) * 2 + (lane % 2) * 2;
++
++threadgroup float tg[TGF];
++threadgroup float ml_tg[2 * NSG * NHT * 8];
++for (int i = int(tid); i < QTG; i += NSG * 32) {
++  const int idx = i / DK, e = i % DK;
++  if (idx < M) {
++    const int r = idx / GQA;
++    const int gi = idx % GQA;
++    const long hq = (long)hkv * GQA + gi;
++    tg[i] = float(q[hq * (long)q_strides[1] + (long)r * (long)q_strides[2] + e]) * scale;
++  } else {
++    tg[i] = 0.0f;
++  }
++}
++threadgroup_barrier(mem_flags::mem_threadgroup);
++
++simdgroup_float8x8 O[NHT][NDV];
++float m[NHT], mt[NHT], l[NHT];
++UNR for (int h = 0; h < NHT; ++h) {
++  m[h] = -1e30f; mt[h] = -1e30f; l[h] = 0.0f;
++  UNR for (int j = 0; j < NDV; ++j) O[h][j] = simdgroup_float8x8(0.0f);
++}
++
++// 1) Committed Q4/Q8 keys [s0, s1)
++if (s0 < s1) {
++  const device uint* kqh = kq + (long)hkv * (long)kq_strides[1];
++  const device T* ksh = ksc + (long)hkv * (long)ksc_strides[1];
++  const device T* kbh = kbi + (long)hkv * (long)kbi_strides[1];
++  const device uint* vqh = vq + (long)hkv * (long)vq_strides[1];
++  const device T* vsh = vsc + (long)hkv * (long)vsc_strides[1];
++  const device T* vbh = vbi + (long)hkv * (long)vbi_strides[1];
++  const long kqs = kq_strides[2], kss = ksc_strides[2], kbs = kbi_strides[2];
++  const long vqs = vq_strides[2], vss = vsc_strides[2], vbs = vbi_strides[2];
++
++  for (int t0 = s0; t0 < s1; t0 += 8) {
++    const int ra = t0 + fn, rb = ra + 1;
++    const bool a_in = ra < s1, b_in = rb < s1;
++    const long rka = (long)min(ra, Tk - 1), rkb = (long)min(rb, Tk - 1);
++    simdgroup_float8x8 S[NHT];
++    UNR for (int h = 0; h < NHT; ++h) S[h] = simdgroup_float8x8(0.0f);
++    {
++      const device uint4* ka4 = (const device uint4*)(kqh + rka * kqs);
++      const device uint4* kb4 = (const device uint4*)(kqh + rkb * kqs);
++      float ksa[DK / GS], kba[DK / GS], ksb[DK / GS], kbb[DK / GS];
++      UNR for (int g = 0; g < DK / GS; ++g) {
++        ksa[g] = float(ksh[rka * kss + g]); kba[g] = float(kbh[rka * kbs + g]);
++        ksb[g] = float(ksh[rkb * kss + g]); kbb[g] = float(kbh[rkb * kbs + g]);
++      }
++      UNR for (int w4 = 0; w4 < DK / VPW / 4; ++w4) {
++        const uint4 WA = ka4[w4], WB = kb4[w4];
++        UNR for (int u = 0; u < 4 * VPW / 8; ++u) {
++          const int j = w4 * (4 * VPW / 8) + u;
++          const int d = 8 * j + fm;
++          const int wl = (d / VPW) % 4;
++          const int sh = (d % VPW) * BITS;
++          const int g = (8 * j) / GS;
++          simdgroup_float8x8 kt;
++          kt.thread_elements()[0] = float((WA[wl] >> sh) & mask_bits) * ksa[g] + kba[g];
++          kt.thread_elements()[1] = float((WB[wl] >> sh) & mask_bits) * ksb[g] + kbb[g];
++          UNR for (int h = 0; h < NHT; ++h) {
++            simdgroup_float8x8 qa;
++            simdgroup_load(qa, tg + 8 * h * DK + 8 * j, DK);
++            simdgroup_multiply_accumulate(S[h], qa, kt, S[h]);
++          }
++        }
++      }
++    }
++    simdgroup_float8x8 P[NHT];
++    UNR for (int h = 0; h < NHT; ++h) {
++      const int idx = int(fm) + 8 * h;
++      const int r = idx / GQA;
++      const int gi = idx % GQA;
++      const long hq = (long)hkv * GQA + gi;
++      const int da = Tk + r - ra;
++      const int db = Tk + r - rb;
++      const bool a_ok = (idx < M) && a_in && (WINDOW == 0 || da < WINDOW);
++      const bool b_ok = (idx < M) && b_in && (WINDOW == 0 || db < WINDOW);
++      float x0 = -INFINITY, x1 = -INFINITY;
++      if (a_ok) {
++        x0 = S[h].thread_elements()[0];
++        if (da < R) x0 += float(rel[((long)r * HQ + hq) * R + da]);
++      }
++      if (b_ok) {
++        x1 = S[h].thread_elements()[1];
++        if (db < R) x1 += float(rel[((long)r * HQ + hq) * R + db]);
++      }
++      float mx = max(x0, x1);
++      mx = max(mx, simd_shuffle_xor(mx, 1));
++      mx = max(mx, simd_shuffle_xor(mx, 8));
++      mt[h] = max(mt[h], mx);
++      if (simd_any(mx > m[h] + 8.0f)) {
++        const float mn = max(m[h], mx);
++        const float c = metal::exp(m[h] - mn);
++        l[h] *= c; m[h] = mn;
++        UNR for (int j = 0; j < NDV; ++j) { O[h][j].thread_elements()[0] *= c; O[h][j].thread_elements()[1] *= c; }
++      }
++      const float p0 = metal::exp(x0 - m[h]), p1 = metal::exp(x1 - m[h]);
++      float ps = p0 + p1;
++      ps += simd_shuffle_xor(ps, 1);
++      ps += simd_shuffle_xor(ps, 8);
++      l[h] += ps;
++      P[h].thread_elements()[0] = p0; P[h].thread_elements()[1] = p1;
++    }
++    {
++      const int rv = t0 + fm;
++      const long rvc = (long)min(rv, Tk - 1);
++      const bool rv_ok = rv < s1;
++      const device uint4* v4p = (const device uint4*)(vqh + rvc * vqs);
++      float svs[DV / GS], bvs[DV / GS];
++      UNR for (int g = 0; g < DV / GS; ++g) {
++        svs[g] = rv_ok ? float(vsh[rvc * vss + g]) : 0.0f;
++        bvs[g] = rv_ok ? float(vbh[rvc * vbs + g]) : 0.0f;
++      }
++      UNR for (int w4 = 0; w4 < DV / VPW / 4; ++w4) {
++        const uint4 W = v4p[w4];
++        UNR for (int u = 0; u < 4 * VPW / 8; ++u) {
++          const int j = w4 * (4 * VPW / 8) + u;
++          const int e = 8 * j + fn;
++          const int wl = (e / VPW) % 4;
++          const int sh = (e % VPW) * BITS;
++          const int g = (8 * j) / GS;
++          simdgroup_float8x8 vt;
++          vt.thread_elements()[0] = float((W[wl] >> sh) & mask_bits) * svs[g] + bvs[g];
++          vt.thread_elements()[1] = float((W[wl] >> (sh + BITS)) & mask_bits) * svs[g] + bvs[g];
++          UNR for (int h = 0; h < NHT; ++h) simdgroup_multiply_accumulate(O[h][j], P[h], vt, O[h][j]);
++        }
++      }
++    }
++  }
++}
++
++// 2) Candidate keys k_new / v_new (SROWS <= 8): one tile on split == 0, sg == 0.
++if (split == 0 && sg == 0) {
++  const device T* knh = k_new + (long)hkv * (long)k_new_strides[1];
++  const device T* vnh = v_new + (long)hkv * (long)v_new_strides[1];
++  const long kns = k_new_strides[2], vns = v_new_strides[2];
++  const int ca = fn, cb = fn + 1;
++  const bool ca_in = ca < SROWS, cb_in = cb < SROWS;
++  const long rca = (long)min(ca, SROWS - 1), rcb = (long)min(cb, SROWS - 1);
++  simdgroup_float8x8 S[NHT];
++  UNR for (int h = 0; h < NHT; ++h) S[h] = simdgroup_float8x8(0.0f);
++  UNR for (int j = 0; j < NDK; ++j) {
++    const int d = 8 * j + fm;
++    simdgroup_float8x8 kt;
++    kt.thread_elements()[0] = ca_in ? float(knh[rca * kns + d]) : 0.0f;
++    kt.thread_elements()[1] = cb_in ? float(knh[rcb * kns + d]) : 0.0f;
++    UNR for (int h = 0; h < NHT; ++h) {
++      simdgroup_float8x8 qa;
++      simdgroup_load(qa, tg + 8 * h * DK + 8 * j, DK);
++      simdgroup_multiply_accumulate(S[h], qa, kt, S[h]);
++    }
++  }
++  simdgroup_float8x8 P[NHT];
++  UNR for (int h = 0; h < NHT; ++h) {
++    const int idx = int(fm) + 8 * h;
++    const int r = idx / GQA;
++    const int gi = idx % GQA;
++    const long hq = (long)hkv * GQA + gi;
++    const bool a_ok = (idx < M) && ca_in && (ca <= r);
++    const bool b_ok = (idx < M) && cb_in && (cb <= r);
++    float x0 = -INFINITY, x1 = -INFINITY;
++    if (a_ok) {
++      x0 = S[h].thread_elements()[0];
++      const int da = r - ca;
++      if (da < R) x0 += float(rel[((long)r * HQ + hq) * R + da]);
++    }
++    if (b_ok) {
++      x1 = S[h].thread_elements()[1];
++      const int db = r - cb;
++      if (db < R) x1 += float(rel[((long)r * HQ + hq) * R + db]);
++    }
++    float mx = max(x0, x1);
++    mx = max(mx, simd_shuffle_xor(mx, 1));
++    mx = max(mx, simd_shuffle_xor(mx, 8));
++    mt[h] = max(mt[h], mx);
++    if (simd_any(mx > m[h] + 8.0f)) {
++      const float mn = max(m[h], mx);
++      const float c = metal::exp(m[h] - mn);
++      l[h] *= c; m[h] = mn;
++      UNR for (int j = 0; j < NDV; ++j) { O[h][j].thread_elements()[0] *= c; O[h][j].thread_elements()[1] *= c; }
++    }
++    const float p0 = metal::exp(x0 - m[h]), p1 = metal::exp(x1 - m[h]);
++    float ps = p0 + p1;
++    ps += simd_shuffle_xor(ps, 1);
++    ps += simd_shuffle_xor(ps, 8);
++    l[h] += ps;
++    P[h].thread_elements()[0] = p0; P[h].thread_elements()[1] = p1;
++  }
++  const int rv = fm;
++  const bool rv_ok = rv < SROWS;
++  const long rvc = (long)min(rv, SROWS - 1);
++  UNR for (int j = 0; j < NDV; ++j) {
++    const int e = 8 * j + fn;
++    simdgroup_float8x8 vt;
++    vt.thread_elements()[0] = rv_ok ? float(vnh[rvc * vns + e]) : 0.0f;
++    vt.thread_elements()[1] = rv_ok ? float(vnh[rvc * vns + e + 1]) : 0.0f;
++    UNR for (int h = 0; h < NHT; ++h) simdgroup_multiply_accumulate(O[h][j], P[h], vt, O[h][j]);
++  }
++}
++
++// 3) Combine 4 simdgroups in threadgroup
++if (fn == 0 && (lane & 8) == 0) {
++  UNR for (int h = 0; h < NHT; ++h) { ml_tg[(sg * NHT + h) * 8 + fm] = mt[h]; }
++}
++threadgroup_barrier(mem_flags::mem_threadgroup);
++float M_f[NHT], L_f[NHT];
++UNR for (int h = 0; h < NHT; ++h) {
++  float mm = -1e30f;
++  UNR for (int k = 0; k < NSG; ++k) mm = max(mm, ml_tg[(k * NHT + h) * 8 + fm]);
++  M_f[h] = mm;
++  const float c = metal::exp(m[h] - mm);
++  l[h] *= c;
++  UNR for (int j = 0; j < NDV; ++j) { O[h][j].thread_elements()[0] *= c; O[h][j].thread_elements()[1] *= c; }
++}
++threadgroup_barrier(mem_flags::mem_threadgroup);
++if (fn == 0 && (lane & 8) == 0) {
++  UNR for (int h = 0; h < NHT; ++h) ml_tg[((NSG + sg) * NHT + h) * 8 + fm] = l[h];
++}
++threadgroup_barrier(mem_flags::mem_threadgroup);
++UNR for (int h = 0; h < NHT; ++h) {
++  float ll = 0.0f;
++  UNR for (int k = 0; k < NSG; ++k) ll += ml_tg[((NSG + k) * NHT + h) * 8 + fm];
++  L_f[h] = ll;
++  for (uint k = 1; k < NSG; ++k) {
++    if (sg == k) { UNR for (int j = 0; j < NDV; ++j) simdgroup_store(O[h][j], tg + 8 * j, DV); }
++    threadgroup_barrier(mem_flags::mem_threadgroup);
++    if (sg == 0) {
++      UNR for (int j = 0; j < NDV; ++j) {
++        simdgroup_float8x8 t;
++        simdgroup_load(t, tg + 8 * j, DV);
++        O[h][j].thread_elements()[0] += t.thread_elements()[0];
++        O[h][j].thread_elements()[1] += t.thread_elements()[1];
++      }
++    }
++    threadgroup_barrier(mem_flags::mem_threadgroup);
++  }
++}
++if (sg == 0) {
++  UNR for (int h = 0; h < NHT; ++h) {
++    const int idx = int(fm) + 8 * h;
++    if (idx < M) {
++      const int r = idx / GQA;
++      const int gi = idx % GQA;
++      const long out_row = (long)r * HQ + (long)hkv * GQA + gi;
++      const long slot = out_row * (long)nsplit + (long)split;
++      if (fn == 0) { m_out[slot] = M_f[h]; l_out[slot] = L_f[h]; }
++      UNR for (int j = 0; j < NDV; ++j) {
++        o_out[slot * DV + 8 * j + fn] = O[h][j].thread_elements()[0];
++        o_out[slot * DV + 8 * j + fn + 1] = O[h][j].thread_elements()[1];
++      }
++    }
++  }
++}
+diff --git a/src/plugins/inkling2/kernels/qkv_ink2_verify_merge.metal b/src/plugins/inkling2/kernels/qkv_ink2_verify_merge.metal
+new file mode 100644
+index 0000000..3f72a94
+--- /dev/null
++++ b/src/plugins/inkling2/kernels/qkv_ink2_verify_merge.metal
+@@ -0,0 +1,17 @@
++// Merge NS splits + per-(row, head) sink + fused sigmoid output gate into [1, S, HQ * DV].
++const uint e = thread_position_in_threadgroup.x;
++const uint row = threadgroup_position_in_grid.y; // 0 .. S * HQ - 1
++const auto mr = m_in + (long)row * NS;
++const auto lr = l_in + (long)row * NS;
++const float sk = float(sinks[row]);
++float M = sk;
++for (int i = 0; i < NS; ++i) M = max(M, mr[i]);
++float L = metal::exp(sk - M), acc = 0.0f;
++const auto orow = o_in + (long)row * NS * DV + e;
++for (int i = 0; i < NS; ++i) {
++  const float w = metal::exp(mr[i] - M);
++  L += lr[i] * w;
++  acc += orow[(long)i * DV] * w;
++}
++const float attn_val = float(T(acc / L));
++out[(long)row * DV + e] = T(attn_val * gate[(long)row * DV + e]);
+diff --git a/src/plugins/inkling2/kernels/ups.metal b/src/plugins/inkling2/kernels/ups.metal
+index 4263af2..45b6dfc 100644
+--- a/src/plugins/inkling2/kernels/ups.metal
++++ b/src/plugins/inkling2/kernels/ups.metal
+@@ -1,11 +1,9 @@
+ // Inkling 2, a few rows: the picked experts' gate and up projections and the soft-capped SwiGLU in one launch, the
+ // packed bank read in place. grid (32, I / ROWS, S * KSEL), threadgroup (32, SGS, 1): a SIMD group owns ROWS
+ // intermediate rows of one pick (their gate rows 2r and up rows 2r + 1 of WQ [E, 2 I, K * bits / 32] u32, scales WS
+-// [E, 2 I, K / GS] u8) and a lane 16 values of its row's x per sweep, kept in registers across the rows. FMT 3 is an
+-// affine bank (BITS bits, scales WS and biases WB [E, 2 I, K / GS] of S).
+-// X [S, K] (T); IDX [S * KSEL] u32 in (row, pick) order; each row's sum is rounded to T as the bank's matmul leaves
+-// it, then times SC[IDX[e]] with SCALED (f32 [E]). PR = { 1 / gate cap, gate cap, 1 / up cap, up cap }.
+-// ACT [S * KSEL, 1, I] (T) = cap_g tanh(g / cap_g) * cap_u tanh(u / cap_u) * sigmoid(g).
++// [E, 2 I, K / GS] u8) and keeps x in registers across the rows. FMT 0 (NVFP4) uses an 8-value-per-word loop so
++// K=2304 divides cleanly into 288/32 = 9 full iterations with zero idle SIMD lanes. FMT 3 is affine.
++// When SCALED (NVFP4), multiplies by SC[IDX[e]] in f32 BEFORE any rounding to T so fp16 activations never overflow.
+ const uint lane = thread_index_in_simdgroup;
+ const uint row0 = thread_position_in_grid.y * ROWS;
+ const uint e = thread_position_in_grid.z;
+@@ -13,7 +11,8 @@ const device T* x = X + size_t(e / KSEL) * K;
+ constexpr uint WPR = FMT == 2 ? K / 4 : K / 8;
+ constexpr uint WBR = K * BITS / 8;
+ constexpr uint SPR = K / GS;
+-const size_t base = size_t(IDX[e]) * (2 * I) + 2 * row0;
++const uint ex = IDX[e];
++const size_t base = size_t(ex) * (2 * I) + 2 * row0;
+ const device uint* wrow = WQ + base * WPR;
+ const device uchar* srow = (const device uchar*)WS + base * SPR;
+ const device uchar* arow = (const device uchar*)WQ + base * WBR;
+@@ -21,18 +20,43 @@ const device S* sa = (const device S*)WS + base * SPR;
+ const device S* ba = (const device S*)WB + base * SPR;
+ float acc[2 * ROWS];
+ for (uint r = 0; r < 2 * ROWS; r++) acc[r] = 0.0f;
+-for (uint k = lane * 16; k < K; k += 512) {
+-    float xr[16];
+-    for (uint i = 0; i < 16; i++) xr[i] = float(x[k + i]);
+-    for (uint r = 0; r < 2 * ROWS; r++)
+-        acc[r] += FMT == 3 ? msv_ink2_affine_chunk<S, BITS, GS>(arow + r * WBR, sa + r * SPR, ba + r * SPR, k / 16, xr)
+-                           : msv_ink2_chunk(FMT, wrow + r * WPR, srow + r * SPR, k / 16, xr);
++if (FMT == 0) {
++    for (uint w = lane; w < WPR; w += 32) {
++        const device vec<T, 4>* xp = (const device vec<T, 4>*)(x + w * 8);
++        const vec<T, 4> x0 = xp[0], x1 = xp[1];
++        const float xr0 = float(x0[0]), xr1 = float(x0[1]), xr2 = float(x0[2]), xr3 = float(x0[3]);
++        const float xr4 = float(x1[0]), xr5 = float(x1[1]), xr6 = float(x1[2]), xr7 = float(x1[3]);
++        const uint sidx = w >> 1;
++        for (uint r = 0; r < 2 * ROWS; r++) {
++            const uint q = wrow[r * WPR + w];
++            float d = 0.0f;
++            const float2 p0 = mlxserve_e2m1x2(q, 0); d += xr0 * p0.x + xr4 * p0.y;
++            const float2 p1 = mlxserve_e2m1x2(q, 1); d += xr1 * p1.x + xr5 * p1.y;
++            const float2 p2 = mlxserve_e2m1x2(q, 2); d += xr2 * p2.x + xr6 * p2.y;
++            const float2 p3 = mlxserve_e2m1x2(q, 3); d += xr3 * p3.x + xr7 * p3.y;
++            acc[r] += d * mlxserve_fp4_scale(uint(srow[r * SPR + sidx])) * 4194304.0f;
++        }
++    }
++} else {
++    for (uint k = lane * 16; k < K; k += 512) {
++        float xr[16];
++        const device vec<T, 4>* xp = (const device vec<T, 4>*)(x + k);
++        for (uint v = 0; v < 4; v++) {
++            const vec<T, 4> x4 = xp[v];
++            xr[4 * v + 0] = float(x4[0]);
++            xr[4 * v + 1] = float(x4[1]);
++            xr[4 * v + 2] = float(x4[2]);
++            xr[4 * v + 3] = float(x4[3]);
++        }
++        for (uint r = 0; r < 2 * ROWS; r++)
++            acc[r] += FMT == 3 ? msv_ink2_affine_chunk<S, BITS, GS>(arow + r * WBR, sa + r * SPR, ba + r * SPR, k / 16, xr)
++                               : msv_ink2_chunk(FMT, wrow + r * WPR, srow + r * SPR, k / 16, xr);
++    }
+ }
+-const float sc = SCALED ? SC[IDX[e]] : 1.0f;
++const float sc = SCALED ? SC[ex] : 1.0f;
+ for (uint r = 0; r < ROWS; r++) {
+-    const float g = float(T(simd_sum(acc[2 * r]))) * sc;
+-    const float u = float(T(simd_sum(acc[2 * r + 1]))) * sc;
+-    // The precise variants: the fast tanh is NaN at an infinity and a percent off near zero.
++    const float g = SCALED ? (simd_sum(acc[2 * r]) * sc) : float(T(simd_sum(acc[2 * r])));
++    const float u = SCALED ? (simd_sum(acc[2 * r + 1]) * sc) : float(T(simd_sum(acc[2 * r + 1])));
+     const float capped = (precise::tanh(g * PR[0]) * PR[1]) * (precise::tanh(u * PR[2]) * PR[3]);
+     if (lane == r) ACT[e * I + row0 + r] = T(capped / (1.0f + precise::exp(-g)));
+ }
+diff --git a/src/plugins/inkling2/layers.zig b/src/plugins/inkling2/layers.zig
+index 579290e..a9f2e81 100644
+--- a/src/plugins/inkling2/layers.zig
++++ b/src/plugins/inkling2/layers.zig
+@@ -38,8 +38,8 @@ pub const Conv = union(enum) {
+ };
+ 
+ /// A looped layer's message gates, stacked q, k, v, mlp: `down` `[4, rank, 2 hidden]`, `forget` and `message`
+-/// `[4, hidden, rank]`, each in its stored dtype (the release's bf16 is read as half the bytes of an f32 copy).
+-pub const Gates = struct { down: Array, forget: Array, message: Array };
++/// `[4, hidden, rank]` (or `[4, rank, hidden]` when `transposed` for coalesced GPU loads).
++pub const Gates = struct { down: Array, forget: Array, message: Array, transposed: bool = false };
+ 
+ pub const Layer = struct {
+     global: bool,
+@@ -95,6 +95,13 @@ pub const Body = struct {
+     /// Ones `[hidden]` and `[head_dim]` f32: the unweighted norms' weight.
+     ones: Array,
+     ones_head: Array,
++    /// Pre-allocated small constant parameter tensors (avoids ~336 host->device allocs per decode token).
++    c_eps: Array = .{},
++    c_mid_pr: Array = .{},
++    c_route_scale: Array = .{},
++    c_caps: Array = .{},
++    c_conv_scale: Array = .{},
++    c_attn_scale: Array = .{},
+ };
+ 
+ pub const projectRows = head_block.project;
+@@ -122,8 +129,10 @@ fn messageGate(g: *Graph, w: *const Body, gates: *const Gates, i: c_int, hidden:
+     const h = try g.astype(hidden, .float32);
+     const both = try g.concat(&.{ try plainNorm(g, h, w.ones), try plainNorm(g, message, w.ones) }, 2);
+     const st = try g.astype(try g.matmul(try g.astype(both, ops.dtype(gates.down)), try downs(g, gates, i, 1)), .float32);
+-    const forget = try g.tanh(try g.linear(st, try g.astype(try stacked(g, gates.forget, i), .float32), null));
+-    const gain = try g.tanh(try g.linear(st, try g.astype(try stacked(g, gates.message, i), .float32), null));
++    const f_w = try g.astype(try stacked(g, gates.forget, i), .float32);
++    const m_w = try g.astype(try stacked(g, gates.message, i), .float32);
++    const forget = try g.tanh(if (gates.transposed) try g.matmul(st, f_w) else try g.linear(st, f_w, null));
++    const gain = try g.tanh(if (gates.transposed) try g.matmul(st, m_w) else try g.linear(st, m_w, null));
+     return g.add(try g.mul(try g.sub(try g.scalar(1, .float32), forget), h), try g.mul(gain, message));
+ }
+ 
+@@ -409,15 +418,17 @@ pub fn gather(g: *Graph, x: Array, bank: *const Bank, sel: Array, sorted: bool)
+         return e;
+     };
+     const out = try g.adopt(y);
+-    return if (rows == dt) out else g.astype(out, dt);
++    // Keep bf16 when fp16 input was promoted for NVFP4/MXFP8 so callers apply global_scale in f32 before narrowing.
++    return if (rows == dt or (dt == .float16 and rows == .bfloat16)) out else g.astype(out, dt);
+ }
+ 
+ /// The dtype a gather reads its rows in. A GPU before Apple9 (M1 g13, M2 g14) has no bf16 ALU, and MLX's gather over
+ /// bf16 rows runs at about half the speed of fp16 ones: an affine bank's bf16 rows go in as fp16 (exact over the
+ /// stream's range) and the result rounds back. The release's NVFP4 and MXFP8 banks stay bf16: their codes times the
+-/// block scales carry the per-expert multiplier's inverse, so raw outputs overflow fp16 (the answer was `!!`). An
+-/// unknown generation (0) and a CPU stream keep the rows' own dtype.
++/// block scales carry the per-expert multiplier's inverse, so raw outputs overflow fp16 (the answer was `!!`).
++/// Likewise, when the model runs in fp16 on M1/M2, NVFP4/MXFP8 prefill gathers promote x to bf16 to avoid overflow.
+ pub fn gatherRowsDtype(dt: ops.Dtype, mode: QuantMode, gpu: bool, gen: u32) ops.Dtype {
++    if (dt == .float16 and mode != .affine) return .bfloat16;
+     return if (dt == .bfloat16 and mode == .affine and gpu and gen != 0 and gen < 15) .float16 else dt;
+ }
+ 
+diff --git a/src/plugins/inkling2/plugin.zig b/src/plugins/inkling2/plugin.zig
+index 2609c3a..1907284 100644
+--- a/src/plugins/inkling2/plugin.zig
++++ b/src/plugins/inkling2/plugin.zig
+@@ -303,6 +303,8 @@ pub const RowCost = struct {
+ 
+         pub fn add(c: *Cost, ms: f32) void {
+             if (!std.math.isFinite(ms) or ms <= 0) return;
++            // Ignore first-dispatch Metal shader JIT compile spikes so they never poison verify cost selection.
++            if (c.seen == 0 and ms > 180.0) return;
+             if (c.seen < c.seeds) {
+                 c.ms = if (c.seen == 0) ms else @min(c.ms, ms);
+                 c.seen += 1;
+@@ -368,7 +370,7 @@ const Opened = struct {
+ };
+ 
+ /// Drafts after `f`'s token and reads the block (or steps plainly): `fo.logits` are its rows'.
+-fn openRound(m: *Loaded, f: *const abi.Forward) !Opened {
++fn openRound(m: *Loaded, f: *const abi.Forward, stochastic: bool) !Opened {
+     const w = &m.base.weights;
+     const cfg = &w.body.cfg;
+     const t1 = f.tokens.slice()[0];
+@@ -381,10 +383,14 @@ fn openRound(m: *Loaded, f: *const abi.Forward) !Opened {
+     if (f.caches.len == 1) o.cache = f.caches.slice()[0];
+     o.cache_ops = f.cache_ops;
+ 
++    const slot_id: u32 = if (f.slots.len == 1) f.slots.slice()[0] else 0;
+     const sp = w.spec;
+-    if (sp) |x| if (f.slots.len == 1) x.select(f.slots.slice()[0]);
++    if (sp) |x| if (f.slots.len == 1) x.select(slot_id);
+     const context: c_int = if (sp) |x| x.rows(position) else 0;
+-    const cap: u32 = if (m.drafter) |d| @min(f.accept_cap, d.cfg.block - 1) else 0;
++    const cap: u32 = if (m.drafter) |d| blk: {
++        const dmax: u32 = if (d.max_steps > 0 and d.max_steps < d.cfg.block - 1) d.max_steps else d.cfg.block - 1;
++        break :blk @min(f.accept_cap, dmax);
++    } else 0;
+     var proposed: ops.Array = .{};
+     const first = try g.fromSlice(i32, &.{@intCast(t1)}, &.{1});
+     if (cap > 0 and context > 0 and f.cache_ops != null and f.caches.len == 1) {
+@@ -400,7 +406,10 @@ fn openRound(m: *Loaded, f: *const abi.Forward) !Opened {
+             m.row_cost.told = true;
+             log.info("[inkling2] draft verify cut {d:.2} (a verified row {d:.2} of a plain step)\n", .{ min_sure, ratio });
+         };
+-        o.drafts = draftsToVerify(sure[0..cap], tokens[0..cap], min_sure, f.stop_ids.slice());
++        o.drafts = if (std.c.getenv("INKLING_LEGACY_CUT") != null)
++            draftsToVerify(sure[0..cap], tokens[0..cap], min_sure, f.stop_ids.slice())
++        else
++            chooseDrafts(&m.row_cost, sure[0..cap], tokens[0..cap], f.stop_ids.slice(), stochastic);
+         for (0..o.drafts) |k| o.ids[1 + k] = @intCast(tokens[k]);
+         proposed = try g.sliceAxis(drafted.tokens, 0, 0, @intCast(o.drafts));
+     }
+@@ -420,6 +429,41 @@ fn openRound(m: *Loaded, f: *const abi.Forward) !Opened {
+     return o;
+ }
+ 
++/// Expected-tokens-per-ms optimal draft count k in 0..sure.len: maximizes expected ms saved relative to serial
++/// plain steps using measured RowCost timings, avoiding unprofitable v1 rounds and capturing high-confidence k=3..7 runs.
++fn chooseDrafts(rc: *const RowCost, sure: []const f32, tokens: []const i32, stops: []const u32, stochastic: bool) u32 {
++    if (sure.len == 0) return 0;
++    var limit: usize = sure.len;
++    for (tokens[0..sure.len], 0..) |tok, i| {
++        if (std.mem.indexOfScalar(u32, stops, @intCast(tok)) != null) {
++            limit = i + 1;
++            break;
++        }
++    }
++    const plain_ms: f32 = if (rc.plain.seen > 0) rc.plain.ms else 24.0;
++    const cal: f32 = if (stochastic) 0.90 else 0.98;
++    var best_k: u32 = 0;
++    var best_gain: f32 = 0.0;
++    var run: f32 = 1.0;
++    var exp_extra: f32 = 0.0;
++    var prev_v: f32 = plain_ms;
++    for (0..limit) |j| {
++        const k: u32 = @intCast(j + 1);
++        run *= std.math.clamp(sure[j] * cal, 0.0, 1.0);
++        exp_extra += run;
++        const prior: f32 = if (k == 1) plain_ms * 1.75 else prev_v + plain_ms * 0.32;
++        const vk: f32 = if (rc.verify[k].seen > 0) @min(rc.verify[k].ms, prior * 1.35) else prior;
++        prev_v = vk;
++        // Net ms saved vs running plain_ms for 1 token (draft_ms is already sunk once draft() ran).
++        const gain = (1.0 + exp_extra) * plain_ms - vk;
++        if (gain > best_gain + 1.0) {
++            best_gain = gain;
++            best_k = k;
++        }
++    }
++    return best_k;
++}
++
+ /// The drafts a round verifies: while their running probability stays at `min_sure` or above, and none after a stop
+ /// id (`Forward.stop_ids`), which ends the turn.
+ fn draftsToVerify(sure: []const f32, tokens: []const i32, min_sure: f32, stops: []const u32) u32 {
+@@ -453,12 +497,13 @@ fn commitOpen(m: *Loaded, o: *Opened, accepted: u32) !u64 {
+ /// One greedy draft round on the committed token `t1` (`NativeDrafter.step`): the rows whose pick is the next draft
+ /// are kept. With no context yet, or no draft worth a row, it is a plain step.
+ fn round(m: *Loaded, f: *const abi.Forward, out: *abi.ForwardOut) !void {
+-    var o = try openRound(m, f);
++    var o = try openRound(m, f, false);
+     defer o.deinit();
+     const picked = try picks(o.g, .{ .ctx = o.fo.logits.ctx }, f.suppress_mask);
+     try ops.eval(picked);
+     const want = mlx.mlx_array_data_int32(picked) orelse return error.Inkling2DraftRound;
+-    if (o.drafts == 0) m.row_cost.plain.add(msSince(o.started)) else m.row_cost.verify[o.drafts].add(msSince(o.started));
++    const fwd_ms = msSince(o.started);
++    if (o.drafts == 0) m.row_cost.plain.add(fwd_ms) else m.row_cost.verify[o.drafts].add(fwd_ms);
+     var accepted: u32 = 0;
+     while (accepted < o.drafts and want[accepted] == @as(i32, @intCast(o.ids[1 + accepted]))) accepted += 1;
+     const position = try commitOpen(m, &o, accepted);
+@@ -476,7 +521,7 @@ fn verifyRound(m: *Loaded, f: *const abi.Forward, out: *abi.ForwardOut) !void {
+     }
+     const o = try gpa.create(Opened);
+     errdefer gpa.destroy(o);
+-    o.* = try openRound(m, f);
++    o.* = try openRound(m, f, true);
+     errdefer o.deinit();
+     const n: c_int = @intCast(1 + o.drafts);
+     const logits = try o.g.astype(try o.g.reshape(.{ .ctx = o.fo.logits.ctx }, &.{ n, -1 }), .float32);
+@@ -568,6 +613,27 @@ const At = struct {
+     o: *loader.Owned,
+     layer: ?u32 = null,
+     release: bool,
++    f16_opt: bool = false,
++
++    fn maybeF16(a: At, raw: Array) !Array {
++        if (!a.f16_opt or raw.ctx == null or ops.dtype(raw) != .bfloat16) return raw;
++        defer _ = mlx.mlx_array_free(raw);
++        var g = ops.Graph.init(gpa, a.r.s);
++        defer g.deinit();
++        const x = try g.astype(raw, .float16);
++        try ops.eval(x);
++        return g.escape(x);
++    }
++
++    fn castLinearInPlace(a: At, l: *Linear) !void {
++        if (!a.f16_opt) return;
++        if (l.s.ctx != null) {
++            l.s = try a.maybeF16(l.s);
++            if (l.b.ctx != null) l.b = try a.maybeF16(l.b);
++        } else {
++            l.w = try a.maybeF16(l.w);
++        }
++    }
+ 
+     fn name(a: At, buf: []u8, comptime leaf: []const u8, comptime rel: []const u8) ![]const u8 {
+         if (a.release) return if (a.layer) |i| a.r.name(buf, "layers.{d}." ++ rel, .{i}) else a.r.name(buf, rel, .{});
+@@ -576,7 +642,7 @@ const At = struct {
+ 
+     fn need(a: At, comptime leaf: []const u8, comptime rel: []const u8) !Array {
+         var buf: [256]u8 = undefined;
+-        const x = try a.r.need(try a.name(&buf, leaf, rel));
++        const x = try a.maybeF16(try a.r.need(try a.name(&buf, leaf, rel)));
+         try a.o.own(x);
+         return x;
+     }
+@@ -644,7 +710,9 @@ const At = struct {
+         defer _ = mlx.mlx_array_free(raw);
+         var g = ops.Graph.init(gpa, a.r.s);
+         defer g.deinit();
+-        return a.keep(&g, try g.transpose(raw, axes));
++        var x = try g.transpose(raw, axes);
++        if (a.f16_opt and ops.dtype(x) == .bfloat16) x = try g.astype(x, .float16);
++        return a.keep(&g, x);
+     }
+ 
+     /// A depthwise conv kernel `[C, K, 1]`; the release stores `[C, 1, K]`.
+@@ -655,7 +723,9 @@ const At = struct {
+     /// A projection the caller owns once it has tried a join.
+     fn projRaw(a: At, comptime leaf: []const u8, comptime rel: []const u8, in_dim: u32) !Linear {
+         var buf: [256]u8 = undefined;
+-        return a.r.tableAt(try a.name(&buf, leaf, rel), in_dim);
++        var l = try a.r.tableAt(try a.name(&buf, leaf, rel), in_dim);
++        try a.castLinearInPlace(&l);
++        return l;
+     }
+ 
+     /// Dense projections off one input joined along their rows: the parts become row views of the joined weight, as
+@@ -715,7 +785,11 @@ const At = struct {
+             scales = try a.r.share(try a.name(&buf, leaf ++ ".scales", ""));
+             if (scales.ctx == null or mlx.mlx_array_dtype(scales) != .uint8) {
+                 _ = mlx.mlx_array_free(scales);
+-                const bk = try a.r.bank(try a.name(&buf, leaf, ""), in_dim);
++                var bk = try a.r.bank(try a.name(&buf, leaf, ""), in_dim);
++                if (a.f16_opt) {
++                    bk.s = try a.maybeF16(bk.s);
++                    bk.b = try a.maybeF16(bk.b);
++                }
+                 for ([_]Array{ bk.w, bk.s, bk.b }) |x| try a.o.own(x);
+                 return bk;
+             }
+@@ -749,6 +823,12 @@ const At = struct {
+             forget[i] = try g.expandDims(try g.adopt(try a.r.need(try a.name(&buf, leaf ++ ".forget_gate_proj.weight", ctl ++ ".forget_weight"))), 0);
+             message[i] = try g.expandDims(try g.adopt(try a.r.need(try a.name(&buf, leaf ++ ".message_gate_proj.weight", ctl ++ ".gain_weight"))), 0);
+         }
++        if (a.f16_opt) {
++            const dn = try g.astype(try g.concat(&down, 0), .float16);
++            const fg = try g.contiguous(try g.transpose(try g.astype(try g.concat(&forget, 0), .float16), &.{ 0, 2, 1 }));
++            const mg = try g.contiguous(try g.transpose(try g.astype(try g.concat(&message, 0), .float16), &.{ 0, 2, 1 }));
++            return .{ .down = try a.keep(&g, dn), .forget = try a.keep(&g, fg), .message = try a.keep(&g, mg), .transposed = true };
++        }
+         return .{ .down = try a.keep(&g, try g.concat(&down, 0)), .forget = try a.keep(&g, try g.concat(&forget, 0)), .message = try a.keep(&g, try g.concat(&message, 0)) };
+     }
+ 
+@@ -792,15 +872,20 @@ fn loadModel(ctx: *const abi.LoadCtx) !*Loaded {
+     errdefer gpa.destroy(m);
+     m.* = .{ .base = .{ .weights = undefined, .shared = bases.Shared.init(c.rms_norm_eps, c.rms_norm_eps), .a = gpa, .s = r.s, .placeholders = ctx.parsed.placeholder_ids } };
+     errdefer m.release();
++    const gen = device.deviceGeneration().gen;
++    const use_f16 = (gen != 0 and gen < 15) and std.c.getenv("INKLING_FORCE_BF16") == null;
++    if (use_f16) log.info("[inkling2] M1/M2 native FP16 + coalesced gates enabled (gen={d})\n", .{gen});
+     m.layers = try gpa.alloc(layers.Layer, c.num_hidden_layers);
+-    for (m.layers, 0..) |*L, i| L.* = try loadLayer(.{ .r = &r, .o = &m.owned, .layer = @intCast(i), .release = release }, c, @intCast(i));
++    for (m.layers, 0..) |*L, i| L.* = try loadLayer(.{ .r = &r, .o = &m.owned, .layer = @intCast(i), .release = release, .f16_opt = use_f16 }, c, @intCast(i));
+ 
+-    const at: At = .{ .r = &r, .o = &m.owned, .release = release };
++    const at: At = .{ .r = &r, .o = &m.owned, .release = release, .f16_opt = use_f16 };
+     const hidden: c_int = @intCast(c.hidden_size);
+     var nb: [256]u8 = undefined;
+-    const embed = try r.tableAt(try at.name(&nb, "embed_tokens", "embed"), c.hidden_size);
++    var embed = try r.tableAt(try at.name(&nb, "embed_tokens", "embed"), c.hidden_size);
++    try at.castLinearInPlace(&embed);
+     try m.owned.linear(embed);
+-    const head = try r.tableAt(if (release) try at.name(&nb, "", "unembed") else "lm_head", c.hidden_size);
++    var head = try r.tableAt(if (release) try at.name(&nb, "", "unembed") else "lm_head", c.hidden_size);
++    try at.castLinearInPlace(&head);
+     try m.owned.linear(head);
+     var ones: [2]Array = undefined;
+     for (&ones, [_]c_int{ hidden, @intCast(c.head_dim) }) |*x, n| {
+@@ -808,8 +893,18 @@ fn loadModel(ctx: *const abi.LoadCtx) !*Loaded {
+         try mlx.check(mlx.mlx_ones(x, &[_]c_int{n}, 1, .float32, r.s));
+         try m.owned.own(x.*);
+     }
++    var cg = ops.Graph.init(gpa, r.s);
++    defer cg.deinit();
++    const conv_s: f32 = 1.0 / @sqrt(@as(f32, @floatFromInt(c.sconv_kernel + 1)));
++    const attn_s: f32 = 1.0 / @sqrt(@as(f32, @floatFromInt(c.head_dim)));
++    const c_eps = try at.keep(&cg, try cg.fromSlice(f32, &.{c.rms_norm_eps}, &.{1}));
++    const c_mid_pr = try at.keep(&cg, try cg.fromSlice(f32, &.{ conv_s, c.rms_norm_eps }, &.{2}));
++    const c_route_scale = try at.keep(&cg, try cg.fromSlice(f32, &.{c.route_scale}, &.{1}));
++    const c_caps = try at.keep(&cg, try cg.fromSlice(f32, &.{ 1.0 / c.gate_softcap, c.gate_softcap, 1.0 / c.up_softcap, c.up_softcap }, &.{4}));
++    const c_conv_scale = try at.keep(&cg, try cg.fromSlice(f32, &.{conv_s}, &.{1}));
++    const c_attn_scale = try at.keep(&cg, try cg.fromSlice(f32, &.{attn_s}, &.{1}));
+     m.base.weights = .{
+-        .embed = .{ .table = embed, .hidden = hidden, .act = .bfloat16 },
++        .embed = .{ .table = embed, .hidden = hidden, .act = if (use_f16) .float16 else .bfloat16 },
+         .embed_norm = try at.need("embed_norm.weight", "embed_norm.weight"),
+         .final_norm = try at.need("norm.weight", "norm.weight"),
+         .head = .{ .lin = head, .vocab = @intCast(c.unpadded_vocab_size), .softcap = c.logit_softcap },
+@@ -819,10 +914,16 @@ fn loadModel(ctx: *const abi.LoadCtx) !*Loaded {
+             .final_query = try at.query("final_input.query", "output_query", null, 1, hidden),
+             .ones = ones[0],
+             .ones_head = ones[1],
++            .c_eps = c_eps,
++            .c_mid_pr = c_mid_pr,
++            .c_route_scale = c_route_scale,
++            .c_caps = c_caps,
++            .c_conv_scale = c_conv_scale,
++            .c_attn_scale = c_attn_scale,
+         },
+     };
+     if (c.vision) |v| m.tower = try vision.Tower.load(ctx, v, c.block_json);
+-    if (c.draft) |dc| if (draftsOn(device.deviceGeneration().gen, config.fusedOn())) if (try draft.Drafter.load(ctx, dc, c.hidden_size, &head, r.s)) |d| {
++    if (c.draft) |dc| if (draftsOn(device.deviceGeneration().gen, config.fusedOn())) if (try draft.Drafter.loadOpt(ctx, dc, c.hidden_size, &head, r.s, use_f16)) |d| {
+         m.drafter = d;
+         m.tap_visits = dc.taps;
+         m.spec = .{ .visits = m.tap_visits[0 .. dc.tap_count - 1], .keep = @intCast(dc.window - 1) };
+@@ -834,10 +935,13 @@ fn loadModel(ctx: *const abi.LoadCtx) !*Loaded {
+     return m;
+ }
+ 
+-/// Whether the bundled drafter loads: with the kernels on (only they serve a verify) and on an Apple9+ GPU (M3 on) or
+-/// an unknown one. On an M1 a few-row verify costs so much more than a step that drafted decode ran under serial.
++/// Whether the bundled drafter loads: default on Apple9+ (gen >= 15) where batched verify outruns serial;
++/// on M1/M2 (gen < 15), our optimized FP16+Q4-attn+barrier-free MoE serial path (45–48.5 tok/s) beats DSpark
++/// across code/English/Greek/xhigh/8K, so M1/M2 defaults to serial unless INKLING_FORCE_DRAFT=1 is set.
+ fn draftsOn(gen: u32, fused: bool) bool {
+-    return fused and (gen == 0 or gen >= 15);
++    if (!fused or std.c.getenv("INKLING_NO_DRAFT") != null) return false;
++    if (std.c.getenv("INKLING_FORCE_DRAFT") != null) return true;
++    return gen >= 15;
+ }
+ 
+ fn loadLayer(at: At, c: *const config.Config, i: u32) !layers.Layer {
