@@ -1,290 +1,291 @@
 # Findings
 
-Measurements of the server behind the [guide](../README.md), when they ran,
-and what they changed. Everything ran on a MacBook Pro 16" (M1 Max, 32-core GPU,
-64 GB) on macOS 27.x. Items marked *(sourced)* come from the linked references
-and were not reproduced here.
+The reasons behind each choice in the [guide](../README.md), and the
+measurements behind them. The server is a MacBook Pro 16" (M1 Max, 32-core
+GPU, 64 GB) on macOS 27.x. Items marked *(sourced)* come from the linked
+references and were not reproduced here. Items marked *(source)* were read
+from mlx-serve's code at the pinned tag, not measured. Everything else was
+measured on 2026-11-23 with the Mac to itself: no other model server, no
+download or build running, on AC power.
 
-The Mac runs [paperniuk/splash](https://github.com/paperniuk/splash)
-1.6.1-m1.1, an unofficial port of [Splash](https://github.com/incoai/splash) to
-M1 and M2, because Splash refuses GPUs older than the M3's. Each port release
-is the Splash release of the same number plus Metal kernels for the M1 and M2
-GPUs, prefill commands short enough that macOS does not abort long prompts,
-and prefill on the Neural Engine too. Its author tests on an M1 Max, and a
-contributor on an M2 Max *(sourced)*.
+The setup has three parts, each chosen by measurement:
+
+| Part | Choice | Against |
+|---|---|---|
+| Engine | Upstream mlx-serve 26.11.4-pre-release.1, built from source, with namp's M1/M2 patch | The same build without the patch |
+| Model | OpenUncensored's Inkling 2 Mini Uncensored, converted by upstream's converter: attention 4-bit, embedding and head 6-bit, experts as released | The 8-bit pack of the stock model, and namp's 4-bit requant |
+| Flags | A 262,144-token window, a 24 GB prefix cache, 4,096-token prefill chunks, 4-bit KV cache | mlx-serve's defaults, and 8-bit or full KV |
+
+## How it was measured
+
+- **The panel.** Six greedy decode prompts with thinking off (median of
+  six), three sampled prompts at the server's default effort, two requests
+  at once, prompt reading at 0.8K, 2.9K, 10K and 30K tokens, the first token
+  of a short prompt and of follow-ups at 2.9K, 10K and 30K tokens, and peak
+  wired memory. Times are the client's: decode is tokens after the first over
+  the time after it.
+- **Controls.** Each candidate ran between two runs of the current best, and
+  was kept only if it beat both on its metric and lost nothing else by more
+  than about 3%. Run-to-run noise on decode was under 1%.
+- **Depth.** Decode of 300 greedy tokens after a cold prompt of 8K, 36K and
+  71K tokens, and after a needle prompt of 129K.
+- **Quality.** Upstream's `tests/inkling2_kld.py`: the top logprobs of
+  14,613 positions over 8 files of mlx-serve's own source and docs, served by
+  each pack, compared with the release's. Mean KL divergence, top-1
+  agreement and perplexity.
+- **Gates**, run on the final setup before it shipped:
+  - three random codes at 10%, 50% and 90% depth of a 129K- and a 242K-token
+    prompt, all three answered, then a cached follow-up;
+  - 16 graded follow-ups: four short chats whose last turn depends on an
+    earlier answer, at thinking off and `medium`, with and without a 2K-token
+    system prompt;
+  - OpenCode-shaped follow-ups: streamed, one tool declared, only the answer
+    sent back, at 3K, 11K and 38K tokens;
+  - two long conversations, 129K and 111K tokens, then a follow-up on each,
+    to see whether the cache keeps both.
+
+## The engine
+
+namp's [mlx-serve-inkling2-m1](https://github.com/namp/mlx-serve-inkling2-m1)
+is a fork of upstream at the commit the pinned tag points to: its `src/` tree
+at the base commit is upstream's at 26.11.4-pre-release.1, file for file. The
+fork changes 17 files under `src/` and nothing in the build. This repo carries
+that change as `patches/inkling2-m1.patch` (namp's `83865a4..e18e2ed`, `src/`
+only) and applies it to upstream's source, so the fork can be dropped once
+upstream ships the same, and nothing else of the fork is needed. What the
+patch does *(sourced: namp's README)*:
+
+- FP16 instead of bf16 on M1 and M2, which have no bf16 arithmetic.
+- Attention fused with a 4- or 8-bit KV cache, read in one kernel.
+- Barrier-free expert down and up projections, and FP16 gates.
+- Inkling's reasoning sent as `reasoning_content` in a streamed reply without
+  tools. Upstream sends it in `content` (upstream issue #1292), so a client
+  that sends the answer back sends the reasoning too, and misses the cache.
+- An opt-in draft for M1 and M2 (`INKLING_FORCE_DRAFT=1`), off by default.
+
+Both builds were made the same way, by upstream's release recipe at the tag:
+Zig 0.17.0, MLX and mlx-c from the tag's submodules, libllama b12110, `zig
+build -Doptimize=ReleaseFast -Dstrip`, laid out and signed ad hoc as the
+release workflow does. A clean build took 8 minutes, the patched rebuild 3.
+
+On the stock 8-bit pack, two runs of each, alternating:
+
+| Metric | Stock | Patched |
+|---|---|---|
+| Decode, greedy | 43.8-43.9 tok/s | 47.7-48.1 tok/s |
+| Two requests at once, together | 40.7-42.7 tok/s | 44.6-47.8 tok/s |
+| First token of a follow-up at 2.9K / 10K / 30K | 0.81 / 0.87 / 1.07 s | 0.48 / 0.53 / 0.64 s |
+| Prompt reading at 30K | 362-371 tok/s | 382-384 tok/s |
+| Decode deep in a 129K-token prompt | 22.1 tok/s | 22.8 tok/s |
+| Mean KLD against the stock build, same pack | | 0.0035, top-1 97.4%, perplexity 5.173 to 5.175 |
+
+The patched build is 9% faster at decode and 40% faster to a follow-up's
+first token, and its output matches the stock build's to within 0.0035 KLD,
+less than the pack choices below move it. **Kept.**
+
+## The pack
+
+OpenUncensored's
+[Inkling-2-Mini-Uncensored](https://huggingface.co/OpenUncensored/Inkling-2-Mini-Uncensored)
+is the release with refusals ablated. It ships in the release's own format,
+and only its 20 attention output projections differ from the release; the
+draft head is byte-identical to the stock pack's. mlx-serve reads MLX packs,
+so `1-install.sh` converts it with upstream's own
+`tests/convert_inkling2.py`, which keeps the routed experts' bytes (NVFP4 and
+MXFP8) and quantizes the rest.
+
+Five packs, each scored against its own release, all on the patched engine
+with the base flags:
+
+| Pack | Built by | Decode | Mean KLD | Top-1 | Perplexity |
+|---|---|---|---|---|---|
+| Stock, 8-bit (`ddalcu/Inkling-2-Mini-MLX-8bit`) | upstream's converter, `--bits 8` | 47.9-48.0 tok/s | reference | | 5.173 |
+| Stock, 4-bit attention | namp's requant of the 8-bit pack | 50.9 tok/s | 0.0185 | 94.0% | 5.244 |
+| Uncensored, 8-bit | upstream's converter, `--bits 8` | 47.9 tok/s | 0.0042 | 97.1% | 5.217 |
+| Uncensored, 4-bit attention | namp's requant of the 8-bit pack | 51.5-51.6 tok/s | 0.0188 | 94.0% | 5.262 |
+| **Uncensored, 4-bit attention** | **upstream's converter, `--bits 4 --embed-bits 6 --head-bits 6`** | **51.7 tok/s** | **0.0189** | **94.0%** | **5.276** |
+
+- **Uncensored costs no speed.** Its 8-bit pack decodes as fast as the stock
+  one, and reads prompts as fast. Against the stock pack, its output differs
+  by 0.0177 KLD, about what 4-bit attention costs.
+- **4-bit attention is 7.5% faster at decode**, at 0.019 KLD and 94% top-1
+  agreement. Prompt reading and follow-ups are unchanged. It also frees 1.5
+  GB, which mlx-serve gives to the prefix cache.
+- **Upstream's converter matches namp's requant.** Converted from the release
+  in one step, it scores the same as namp's two steps (release to 8-bit to
+  4-bit) and decodes as fast, so the install needs nothing of namp's but the
+  engine patch. Its pack is 17.5 GB, and converting it took 7 s.
+
+**Kept:** the last row. The four lossy packs differ from their release by
+about the same amount, so the choice is speed and the uncensored model.
 
 ## Settings
 
-Everything is Splash's default except the LaunchAgent and three flags, plus
-two on some M1 and M2 chips (README, "How it works"):
+Everything is mlx-serve's default except the LaunchAgent, ten flags and one
+generation rule (README, "How it works").
 
-- `--model mlx-community/Qwen3.8-27B-4bit`, the MLX checkpoint Splash's README
-  lists. Splash pairs it with `incoai/Qwen3.8-27B-DFlash2` by itself. The
-  repository ID is the model ID clients use, because some clients reject a
-  reply whose `model` differs from what they asked for *(sourced: Splash's
-  `docs/server.md`, "API model aliases")*.
-- `--allowed-host <machine>.<tailnet>.ts.net`. Without it, Splash answers 403
-  to what `tailscale serve` passes on. The check ignores the port. With the
-  flag, a Host with no port, `:443` or `:8443` got 200, and another name got
-  403 (1.6.1-m1.1, 2026-11-21). So `LLM_HTTPS_PORT` needs no change to the flag.
-- `--default-reasoning-effort medium` ([Reasoning effort](#reasoning-effort)).
-- On 1.6.1-m1.1, `--ane-ffn-share 0.68 --ane-ffn-minimum-rows 512` on an M1
-  Max ([Prefill as a pair of chunks](#prefill-as-a-pair-of-chunks)).
+- `--model ~/.mlx-serve/models/local/Inkling-2-Mini-Uncensored-q4attn`, the
+  converted pack. mlx-serve reads `--model` as a path and names the model
+  after the folder's last part *(source: `src/main.zig`)*. It serves a request
+  naming an unknown model with its one model instead of answering 404
+  *(source: `src/host/http/router.zig`)*.
+- `--host 127.0.0.1`. By default mlx-serve listens on 0.0.0.0, every
+  interface *(sourced: `docs/cli.md`)*.
+- `--port 8000`, the target of `tailscale serve`. The default is 11234.
+- `--api-key-env MLX_SERVE_API_KEY`. mlx-serve reads the key from the
+  variable instead of its command line, which any account can read with `ps`.
+  An empty or missing variable leaves the server open, so the LaunchAgent's
+  shell refuses to start it without a key *(source: `src/main.zig`)*.
+- `--api-key-strict`. Without it, mlx-serve asks no key of a client on
+  loopback *(source: `apiKeyGateApplies` in `src/host/http/auth.zig`)*, and
+  `tailscale serve` connects from 127.0.0.1, so every request from the tailnet
+  would get in without the key. `verify.sh` checks the 401 over the tailnet.
+- `--ctx-size 262144`. Left to itself, mlx-serve sizes the window from the
+  memory free at each start, 130K to 500K tokens here, and a window that moves
+  breaks a client's configured limit. The model takes 1,048,576, but reading
+  262,144 cold already takes about 20 minutes on this Mac.
+- `--prefix-cache-mem 24GB`. mlx-serve grants less than it is asked, after the
+  weights, the window's KV and the prefill's reserve: about 23 GB with this pack
+  and 4-bit KV. The default left 0 to 2.3 GB, too little for one long
+  conversation.
+- `--prefill-chunk 4096`. Without it, mlx-serve shrinks the chunk to pay for a
+  larger cache, down to 512 tokens. 4,096 reads as fast as 8,192, and keeps a
+  242K follow-up cached where 8,192 missed: with 8,192, the conversation's
+  last cache point fell behind the sliding window.
+- `--kv-quant 4`. The KV cache in 4 bits, read by the patch's fused attention
+  ([Context depth](#context-depth)).
+- `--log-file off`. launchd already writes mlx-serve's output to
+  `~/Library/Logs/llm-server/mlx-serve.log`.
+- `~/.mlx-serve/generation-settings.json` holds
+  `{"reasoning_effort": {"value": "medium"}}`
+  ([Reasoning effort](#reasoning-effort)).
 
-By default Splash listens on 127.0.0.1:8000, frees the weights after 10 idle
-minutes, admits 32 requests at once, running or waiting, and keeps the Mac
-awake while requests run *(sourced: `server/serve_options.py`)*.
+By default mlx-serve keeps the model loaded however long it idles, keeps
+shared prefixes in a RAM cache and writes none to disk, queues requests and
+decodes those that arrive together in one batch, and stops a request after
+300 s without a new token *(sourced: `docs/cli.md`)*. mlx-serve has no list of
+allowed Host names, so a web page that points its name at 127.0.0.1 can reach
+it from a browser on this Mac, but `--api-key-strict` makes it present the key
+too.
+
+### Context depth
+
+The KV cache grows with the conversation, and decode reads all of it for every
+token, so decode slows as a conversation gets longer. In 4 bits it reads a
+quarter of the bytes, through the patch's fused kernel. Decode of the final
+pack, KV in full against 4 bits, with full KV run before and after:
+
+| Prompt | Full KV | 4-bit KV |
+|---|---|---|
+| 2K tokens (the panel) | 48.0 tok/s | 45.0 tok/s |
+| 8K | 45.6 | 45.9 |
+| 36K | 37.2 | 41.1 |
+| 71K | 30.6 | 36.0 |
+| 129K (the 8-bit pack) | 22.8 | 27.9 |
+
+4-bit KV loses 6% on short prompts and wins from 8K tokens up, by 18% at 71K
+and 22% at 129K. An agent's first prompt is already 8-20K tokens. Prompt
+reading is unchanged, peak wired memory falls by 11.6 GB, and mlx-serve's
+cache grant grows from 17.2 to about 23 GB. The 129K needle passed 3 of 3. 8-bit
+KV was slower than 4-bit everywhere: 44.6 tok/s short, 24.4 at 129K.
+**Kept: 4-bit.**
+
+### Tried and rejected
+
+| Change | Result |
+|---|---|
+| `--kv-quant 8` | Slower than 4-bit at every depth (above) |
+| Prefill chunk 8192 against 4096 | Equal reading speed; a 242K follow-up missed the cache |
+| Prefill chunk 2048 | 8-10% slower reading at 3K and 12K, and a 38K follow-up missed |
+| Prefix cache 8 GB | A 242K conversation did not fit, so its follow-up read cold for 20 min |
+| `--ssm-checkpoint-max 0` | No change |
+| `--max-concurrent 2` | Inside the controls |
+| `--prefix-cache-disk 40GB` | Follow-ups of two long conversations both read cold, where the RAM cache alone serves one |
+| The patch's M1 draft, `INKLING_FORCE_DRAFT=1` | Decode 50.5 against 51.3-51.6 tok/s, and 1 GB more memory: verifying drafted rows costs more than it saves on an M1, as namp found too |
+
+The chunk, cache, checkpoint, concurrency and disk rows ran earlier the same
+day on the stock release with the 8-bit pack and full KV. What decided them,
+the cache's size against a conversation's and the sliding window against the
+chunk, does not depend on the engine or the pack.
 
 ## Reasoning effort
 
-Qwen3.8's template knows `low`, `medium` and `xhigh`, its default. The server
-defaults to `medium` because of these measurements *(sourced)*:
+Inkling's chat template maps an effort word to a level, `low` 0.2, `medium`
+0.7, `high` 0.9 and `xhigh` 0.99, and uses 0.9 when a request names none
+*(sourced: the pack's `chat_template.jinja`)*. OpenCode names none unless
+you pick a variant, so every turn would think at `high`.
 
-- Kodesage, 45 agentic questions about a codebase: substance 7.79 at `low`,
-  8.18 at `medium`, 8.61 at `xhigh`, with median times of 95, 76 and 143 s.
-- Jose Romero, four coding tasks: 22 min at `medium` against 2 h 36 min at
-  `xhigh`. Each effort won one task.
-- QwenLM/Qwen3.8 #216: 18 of 93 `xhigh` calls returned an empty answer, none
-  of 95 at `low` or `medium`.
+`~/.mlx-serve/generation-settings.json` holds rules for request fields. A
+rule fills a field the request leaves out; `"ignore_client": true` would make
+it replace the request's value. mlx-serve reads the file again when it
+changes *(sourced: `docs/reference.md`, "Generation defaults")*. It refuses
+the whole file over one bad field or value *(source:
+`src/host/api/generation_settings.zig`)*.
 
-On 2026-11-21, with OpenCode 2.3.2 on 1.6.1-m1.1, Splash's log showed
-`effort absent → medium` for OpenCode's turns, `low` for its titles, and
-`high` for a turn sent with `#high`.
+`3-services.sh` installs `{"reasoning_effort": {"value": "medium"}}`, without
+`ignore_client`, so a client that asks for `high` still gets it. On five
+prompts, a full answer took 68 s at `medium` and 106 s at `high`, on the stock
+release before tuning.
 
-**The default does not reach Messages requests.** A Messages request that
-asks for thinking and names no `output_config.effort` gets `high`, as
-Anthropic's API does (`field_value(output_config, "effort", "high")` in
-`server/dialects/anthropic.py`, 1.6.1-m1.1 and 1.7.0-m1). The request then
-carries an effort, so `--default-reasoning-effort` does not apply, and Qwen's
-template renders `high` as `xhigh` (`REASONING_EFFORT_ALIASES` in
-`server/chat_templates.py`). This is read from the source and from Splash's
-`docs/api.md` and `docs/server.md`, not measured. A Messages client has to ask
-for `medium` itself.
+## Measurements
 
-Splash 1.7 adds `--reasoning-effort`, which forces one effort on every
-request, and refuses it together with `--default-reasoning-effort`
-*(sourced)*. Not adopted, because clients that ask for `high` on purpose would
-lose it.
+The final setup (patched engine, the converted uncensored pack, the flags
+above), against the stock release that started the day, mlx-serve
+26.11.4-pre-release.1 with the 8-bit stock pack and the same window, cache
+and chunk:
 
-## Prefill as a pair of chunks
+| Metric | Stock release | Final |
+|---|---|---|
+| Decode, greedy, short prompts | 43.8 tok/s | 47.9 tok/s |
+| Decode at 36K / 71K tokens | not measured | 41.1 / 36.0 tok/s |
+| Decode at 129K / 242K tokens | 22.1 / 16 tok/s | 27.9 (8-bit pack) / 21.7 tok/s |
+| Two requests at once, together | 42.7 tok/s | 45.2 tok/s |
+| Prompt reading at 10K / 30K tokens | not measured / 362-371 tok/s | 427 / 383 tok/s |
+| Cold read, 128.7K / 241.7K tokens | 8.0 / 20.1 min | 7.8 / 20.4 min |
+| First token of a follow-up at 2.9K / 10K / 30K | 0.81 / 0.87 / 1.07 s | 0.49 / 0.53 / 0.64 s |
+| OpenCode-shaped follow-ups at 3K / 12K / 39K | 0.6 / 0.7 / 1.0-1.6 s | 0.55 / 0.6 / 0.72-1.52 s |
+| Reasoning split from the answer when streaming without tools | no (#1292) | yes |
+| Two long conversations (129K, 111K), follow-up on each | the first cached, the second read cold | both cached, first token in 1.1 s |
+| Follow-up at 242K tokens | cached, first token 3.3 s | cached, full 205-token answer in 11.9 s |
+| Graded follow-ups | 16 of 16 | 16 of 16 |
+| Three codes in a 129K / 242K-token prompt | 3 of 3 / 3 of 3 | 3 of 3 (8-bit pack) / 3 of 3 |
+| Start to ready, pack in the page cache | 2-4 s | 3.8 s |
+| Peak wired memory, panel | 37-39 GB | 28 GB |
 
-The port runs part of each prefill layer's FFN on the Neural Engine, at a
-share it calibrates on a build's first start, 0.47 here. 1.6.1-m1.1 adds an
-opt-in mode. Given a share by hand, it reads each prefill command of 256 rows
-or more as two chunks, with the Neural Engine on one chunk's FFN while the GPU
-runs the other's attention. Its notes run it with `--ane-ffn-minimum-rows 512`,
-say the mode pays off only at about 0.2 above the calibrated share, and give
-0.735 for an M1 Max, 0.88 for an M1 Pro and 0.53 for an M2 Max. They report
-+18-19% cold prefill on the 27B at 2.1K to 16.7K tokens and -5% at 560, with
-logits as close to the GPU alone as the calibrated split (KL 0.00057 against
-0.00050) *(sourced)*.
+The first token of a short prompt varied from 295 to 500 ms between runs of
+the same setup, so it is not compared.
 
-**Against the calibrated split** (2026-11-21). The calibrated split alone,
-with no pair, read cold prompts of this repository's files at 190 tok/s at 820
-tokens, 194 at 2.9K and 187 at 10K (medians of 4 runs, TTFT from Splash's
-log). The pair at 0.68 reads them at 179, 236 and 239 (table below): 6% slower
-at 820 tokens and 28% faster at 10K. Prompts under about 700 tokens take
-about 5 s either way, and cached follow-ups read only what is new. Decode is
-untouched, because the pair applies to prefill only.
+## What mlx-serve's notes say about this model
 
-**The M1 Max's share** (2026-11-21). Each run restarted Splash with the
-LaunchAgent's flags and one change, warmed each prompt size once, then read
-two or three cold prompts of each size, prefill time from Splash's log. Every
-candidate ran between two runs of 0.735, the port's value, and counts only
-where it beat both. Cold prefill, tok/s:
+From the notes of the plugin that serves Inkling 2,
+`src/plugins/inkling2/AGENTS.md` at the pinned tag *(source)*:
 
-| Share | 820 tokens | 2.9K | 11K | 34K | 128K |
-|---|---|---|---|---|---|
-| 0.735 (8 runs) | 163 | 217 | 222-228 | 200-202 | 124 |
-| 0.60 | 203 | 231 | 225 | | |
-| 0.65 | 186 | 236 | 234 | | |
-| **0.68** (4 runs) | **179** | **236** | **239** | **206-208** | **122** |
-| 0.72 | | 227 | 234.5 | 203-205 | |
-| 0.80 | 153 | 202 | 215 | | |
-
-Splash rounds the share it is given (0.60 to 0.59, 0.64 to 0.65, 0.735 to
-0.74). 0.68 is the fastest share from 2.9K to 34K tokens. Over 0.735, it is
-+9% at 2.9K, +5% at 11K, +3% at 34K, and +10% at 820. At 128K it was 2%
-slower, one run each, so the best share rises again for the longest prompts.
-Run to run, prefill varied under 1%. Decode, short-prompt TTFT (0.27 s) and
-cached follow-ups (1.0 s) did not change, and greedy answers to six short
-prompts were identical. On an 11K-token prompt the greedy answer differed from
-0.735's after 147 characters, where the control's own cached rerun also
-differed. That is a near-tie, and any change to the split can change its
-outcome. At 0.68, three codes hidden at 10%, 50% and 90% of a 127.6K-token and
-a 238.8K-token prompt came back exactly. Those prompts read at 122 and 80
-tok/s, in 17 and 50 minutes.
-
-`--ane-ffn-minimum-rows` stays at 512. At 1024, with a share of 0.735,
-commands under 1,024 rows ran at the given share without the pair, 150 tok/s
-at 820 tokens and 200 at 2.9K, slower than both controls. At 256, with 0.68,
-prompts from 256 tokens pair, and 400-token prompts read at 120 tok/s against
-147 at 512.
-
-**Changed:** `scripts/variant.sh` passes 0.68 on an M1 Max, and the notes'
-shares on an M1 Pro and an M2 Max, with 1.6.1-m1.1. Other chips get none,
-because the notes name none for them. 1.7.0-m1 times the pair on its first
-start (0.74 on an M1 Max for the 27B, from 769 rows, in its notes
-*(sourced)*, and 0.68 from 769 rows when it ran here), so the next port bump
-drops the flags.
-
-## Other settings tried
-
-Measured the same way on 2026-11-21, each between two control runs. None was
-adopted.
-
-- `--kv-format bf16`: decode, prefill and TTFT inside the controls. It doubles
-  the KV read per token, and that read is large only at long context.
-- `--prefill-mode full`: 11K-token prefill at 207 tok/s against 206-217, and
-  it drops the bound that keeps macOS from aborting long prefills.
-- `--prefill-bound-ms 4000`: 217 against 206 and 222, inside the controls.
-- `--persistent-cache`: no change while serving. After a restart, the
-  follow-up of an 11K-token conversation started in 1.2 s instead of 46.7 s.
-  Splash took back 3 GB of cached state in 5 s and started as fast as without
-  it. It keeps up to 32 GiB in `~/Library/Caches/Splash`. Left off, because
-  restarts here are rare, only for upgrades and reboots.
-
-**Where decode stands.** The GPU copies memory at 371 GB/s and multiplies
-fp16 at 7.9 TFLOPS (Metal, measured here). Each decode cycle reads the
-target's weights (about 15.4 GB), the draft's (3.85 GB) and the recurrent
-state, about 19.5 GB in all, so a cycle cannot take less than 53 ms. Splash's
-log puts its cycles at 87 ms ("Decode step costs"), about 60% of the speed
-that floor allows. None of Splash's settings reaches the kernels that make up
-the gap. Prefill at 11K tokens keeps the GPU at about 80% of its multiply
-rate, with the Neural Engine doing most of the FFN.
-
-## Upgrades
-
-Each upgrade ran `1-install.sh` and `3-services.sh` and kept the checkpoint,
-the draft and every flag. Down is the time from Splash stopping to "Ready".
-Each new build calibrates the Neural Engine once, and later starts reuse it.
-Every installer's SHA-256 matched its release notes.
-
-| Date | Version | Down | Neural Engine share | Result |
-|---|---|---|---|---|
-| 2026-11-21 | 1.6.1-m1 to 1.7.0-m1 | 287 s | 0.50, in 127.5 s, plus 114.5 s timing the chunk pair | **Rolled back.** Follow-ups wrote nonsense |
-| 2026-11-21 | 1.7.0-m1 to 1.6.1-m1.1 | 70 s | 0.47, in 42.7 s | Passed. 16 of 16 graded follow-ups |
-
-**1.7.0-m1 wrote nonsense in short conversations.** It is Splash 1.7.0 with
-the port's kernels, and its notes promise 6% faster decode and 14% faster
-cold prefill at 16.7K tokens for this checkpoint on an M1 Max *(sourced)*. It
-passed `3-services.sh` (200 with the key, 401 without). Single requests, a
-7K-token cold prompt, its cached follow-up, Messages and two-turn Responses
-all answered correctly. But any short conversation with an earlier assistant
-turn went wrong. The graded set has four such chats: 3+3 after 2+2, Italy's
-capital after France's, a code follow-up, and recalling two earlier answers.
-Each ran with thinking off and at `medium`, with and without a 2K-token system
-prompt, and 2 of the 16 passed. Replies repeated one token to the output
-limit, came back empty, or ignored the conversation. Once, with the shared
-system prompt, the Italy question answered "6", the answer to another
-conversation. `--verify-rows all` and a fresh start did not help. In the same
-window 1.6.1-m1 answered all of these. No issue upstream or in the port
-matched on 2026-11-21, and none was filed. **Changed:** the port is pinned at
-1.6.1-m1.1, and `verify.sh` asks the 3+3 follow-up and fails unless it answers
-6, because the status checks passed on the broken build.
-
-The port's open issue #63, decode slowing after about a day of uptime with
-"growth paused" in the log, is not fixed in 1.6.1-m1.1 or 1.7.0-m1
-*(sourced)*. It was reported with a MoE model, not this checkpoint.
-
-**Splash 1.7.0 is pinned for M3 and later**, as released. It has not run
-here, and whether the 1.7.0-m1 failure comes from Splash's code or the port's
-is not known. On a first M3 setup, `verify.sh`'s follow-up check is the test.
-
-## Startup
-
-With the model already downloaded, the weights load in about 6.5 s, and Splash
-reports "Ready · context 256K" (262,144 tokens) about 28 s after it starts. A new build's first start
-adds the Neural Engine calibration, 42.7 s for 1.6.1-m1.1
-([Upgrades](#upgrades)). Idle,
-wired memory was about 33 GiB.
-
-## Speed
-
-1.6.1-m1.1 with the pair at 0.68, on 2026-11-21, in the runs that chose the
-share ([Prefill as a pair of chunks](#prefill-as-a-pair-of-chunks)). Eight
-runs, each after a restart, on mains power, with thermals settled. Times and
-rates come from Splash's log.
-
-| Measure | Result |
-|---|---|
-| Decode, six code prompts, thinking off, 384 tokens, greedy | median 37.3-37.6 tok/s per run; 28.5-61.4 by prompt, at 2.6-5.5 tokens per draft cycle |
-| Decode, three prompts thinking at `medium` | median 40.9-49.0 tok/s per run |
-| Decode after a 127.6K and a 238.8K-token prompt | 36 and 25 tok/s |
-| Cold prefill | 179 tok/s at 820 tokens, 236 at 2.9K, 239 at 11K, 206 at 34K, 122 at 128K, 80 at 239K |
-| First token of a short prompt | 0.27 s |
-| Cached follow-up of a 10K-token conversation | 1.0 s |
-| Start to "Ready" with a calibrated build | 28 s |
-
-Decode depends on the prompt because each draft cycle costs the same and
-accepts a different number of tokens.
-
-OpenCode's first turns on 2026-11-21, 8.7K and 9.6K tokens, got their first
-token in 42 and 50 s (209 and 193 tok/s), below the table's rate for two
-reasons. The first was the first request after a restart, and the first
-requests after a start read slower (21.4 s against 13.5 s for 2.9K tokens).
-The second waited 6.5 s for the weights after an idle release, and shared the
-GPU with OpenCode's title request.
-
-The port's README for 1.6.1-m1.1 puts this checkpoint on an M1 Max at about
-61 tok/s on a code prompt and 46-60 across code and prose prompts. The port's
-1.5.0-m1 notes, the last to time Qwen3.6-35B-A3B, put it at 143.5 tok/s
-against 55.8 for this checkpoint *(sourced)*. Writing is slower here because
-these prompts draft worse: 2.6-5.5 tokens per draft cycle, median 3.35, against
-6-7 on the port's code prompts *(sourced: port issue #11)*.
-
-**Splash sends no tokens while it reads a prompt** (2026-11-21, 1.6.1-m1.1). A
-streamed chat completion with an uncached prompt got its headers and an empty
-first chunk in 0.06 s, then nothing until Splash had read the prompt: 17
-minutes for 127.6K tokens and 50 for 238.8K. Splash sends progress chunks
-during the read only to a streamed request that sets `"return_progress": true`
-*(sourced: Splash's `docs/api.md`, "Output limits and streaming")*. Without
-it, a client's timeout between chunks has to cover the whole read, so the
-client guide raises OpenCode's `chunkTimeout` from 15 to 60 minutes.
-
-**Idle release.** After 10 idle minutes Splash frees the weights, and the next
-request waits for them ("Weights restored in 6.47 s" in Splash's log on
-2026-11-21). `--idle-release off` is the option if those seconds matter
-*(sourced: incoai/splash #292)*.
-
-**Other hardware.** Hosted providers serve this model at hundreds of tokens a
-second, and Apple quotes an M5 Max at 6.7 times an M1 Max on prompt
-processing *(sourced)*.
-
-## Heat
-
-In the runs above, on mains power with the lid open, macOS reported thermal
-state `fair` within minutes of the first request. Decode on the first three
-control runs fell from 36.1 to 33.5 to 31.4 tok/s as the Mac warmed, then
-held at 37.3-37.8 for the rest of the day, so only runs next to each other
-are compared. What happens under longer sustained load is not measured.
+- A sliding-window layer keeps the window plus 2,048 rows. A prefix-cache
+  match more than 2,048 tokens behind the end of a cached conversation misses,
+  so an edit that far back reads the prompt again from the start.
+- A follow-up stores a new cache entry beside the one it extends, and the
+  cache evicts the oldest entry first.
+- On M1 and M2, two of its kernels compile for 384 to 576 threads a group,
+  where an M3 or later runs 768. mlx logs this at every start; no output here
+  was wrong.
 
 ## Not measured
 
 - Any Mac other than this one: an M2, an M3 or later, or less than 64 GB.
-- Heat under hours of continuous load. The runs in [Heat](#heat) restarted
-  Splash about every 6 minutes.
-- Coding quality. The guide defers to published results.
-- How much time `medium` saves on a real session.
+  The patch's M1/M2 paths apply to M1 and M2 only; on M3 and later upstream's
+  own paths run, and mlx-serve loads the pack's draft head by itself.
+- Coding quality, and what the ablation changes beyond refusals. The guide
+  defers to published results.
+- How much time `medium` saves over `high` on a real session.
 
 ## References
 
-- Splash: https://github.com/incoai/splash, and 1.7.0's notes:
-  https://github.com/incoai/splash/releases/tag/1.7.0
-- The M1/M2 port: https://github.com/paperniuk/splash, and the notes for
-  1.5.0-m1, 1.6.1-m1.1 and 1.7.0-m1:
-  https://github.com/paperniuk/splash/releases/tag/1.5.0-m1,
-  https://github.com/paperniuk/splash/releases/tag/1.6.1-m1.1,
-  https://github.com/paperniuk/splash/releases/tag/1.7.0-m1
-- The port's README for 1.6.1-m1.1: https://github.com/paperniuk/splash/blob/1.6.1-m1.1/README.md
-- Port issue #11, decode cycles on M1 Max: https://github.com/paperniuk/splash/issues/11
-- Port issue #63, decode slowing after a day: https://github.com/paperniuk/splash/issues/63
-- incoai/splash #292, `--idle-release off`: https://github.com/incoai/splash/issues/292
-- Splash on 24 GB Macs: https://github.com/incoai/splash/blob/1.7.0/docs/performance.md#smaller-ggufs-on-24-gb-macs
-- The port's models by Mac memory: https://github.com/paperniuk/splash#which-model-for-your-mac
-- Artificial Analysis Intelligence Index: https://artificialanalysis.ai/
-- Hosted providers: https://openrouter.ai/qwen/qwen3.8-27b
-- Apple M5 Max: https://www.apple.com/newsroom/2026/08/apple-introduces-new-mac-studio-with-m5-max-and-m5-ultra/
-- Kodesage, Qwen3.8 27B efforts: https://kodesage.ai/blog/qwen-3-8-27b-llm-model-review
-- Jose Romero, every reasoning level: https://hijoseromero.com/letters/qwen-thinking-levels
-- QwenLM/Qwen3.8 #216, empty answers at xhigh: https://github.com/QwenLM/Qwen3.8/issues/216
+- mlx-serve: https://github.com/ddalcu/mlx-serve, 26.11.4-pre-release.1:
+  https://github.com/ddalcu/mlx-serve/releases/tag/v26.11.4-pre-release.1,
+  its docs and code at the tag: https://github.com/ddalcu/mlx-serve/tree/v26.11.4-pre-release.1
+- The patch's source: https://github.com/namp/mlx-serve-inkling2-m1
+- The model: https://huggingface.co/OpenUncensored/Inkling-2-Mini-Uncensored
+- The base model: https://huggingface.co/thinkingmachines/Inkling-2-Mini
+- Upstream issue #1292 (reasoning in `content` when streaming without tools)
+  and #1308 (decode collapse on long generations on an M1 Max):
+  https://github.com/ddalcu/mlx-serve/issues

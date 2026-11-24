@@ -21,9 +21,9 @@ for url in $(serve_urls_to "http://127.0.0.1:$LLM_PORT"); do
 		warn "could not stop tailscale serve: run 'tailscale serve --https=$(url_port "$url") off'"
 	fi
 done
-stop_job "gui/$LLM_UID/$SPLASH_LABEL"
-rm -f "$SPLASH_PLIST"
-ok "Splash server $SPLASH_LABEL removed"
+stop_job "gui/$LLM_UID/$MLX_SERVE_LABEL"
+rm -f "$MLX_SERVE_PLIST"
+ok "mlx-serve server $MLX_SERVE_LABEL removed"
 
 step "Hardening"
 stop_job "system/$L_WATCHDOG"
@@ -53,20 +53,15 @@ if [ -f "$DROPIN" ]; then
 	fi
 fi
 
-case $SPLASH_VARIANT in
-	port) splash="$SPLASH_HOME, $SPLASH_BIN" ;;
-	upstream) splash="brew unpin splash && brew uninstall splash" ;;
-	*) splash="none: no Splash build runs on ${CPU_BRAND:-this chip}" ;;
-esac
 cat <<LEFT
 
 == Left in place, on purpose
-  models           ~/.cache/huggingface/hub    (hf cache delete, or delete the folder)
+  models           $LLM_HOME/.mlx-serve/models   (the release and the converted pack)
+  mlx-serve        $MLX_SERVE_HOME   (builds, source, the converter's Python)
+  settings         $MLX_SERVE_GEN_SETTINGS
   API key          $KEY_FILE
-  logs             $SPLASH_LOG, $LLM_LOGS
-  Splash           $splash
-  Splash's data    $LLM_HOME/Library/Application Support/Splash
-  packages         sudo $TAILSCALED uninstall-system-daemon, then brew uninstall tailscale
+  logs             $MLX_SERVE_LOG, $LLM_LOGS
+  packages         sudo $TAILSCALED uninstall-system-daemon, then brew uninstall tailscale cmake webp python@3.12
   tailnet          sudo tailscale logout
   power settings   pmset -g custom   (these are ordinary macOS settings)
   FileVault        left as it is

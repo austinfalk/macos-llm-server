@@ -1,9 +1,9 @@
 # Working in this repo
 
 A guide and scripts for running a private model server on an Apple Silicon Mac
-with [Splash](https://github.com/incoai/splash), behind `tailscale serve`. An
-M3 or later runs Splash. An M1 or M2 runs its port,
-[paperniuk/splash](https://github.com/paperniuk/splash).
+with 64 GB: [mlx-serve](https://github.com/ddalcu/mlx-serve) serving
+Inkling 2 Mini Uncensored, behind `tailscale serve`. mlx-serve is built from
+upstream's source with one patch for M1 and M2 GPUs.
 
 **Read `NEXT.md` first if it exists.** It is untracked and holds the state of
 the machine this checkout runs on and the work left on it.
@@ -13,48 +13,60 @@ scripts do not run there.
 
 ## Where things are
 
-- `README.md` is the setup guide, including "Update Splash".
-- `docs/findings.md` holds the measurements behind each setting and upgrade.
+- `README.md` is the setup guide, including "Update mlx-serve".
+- `docs/findings.md` holds the measurements behind the engine, the patch, the
+  model pack and each flag.
 - `docs/clients.md` is the guide for connecting a client.
 - `scripts/` holds the numbered setup steps, `verify.sh` and `uninstall.sh`.
-  Every script sources `lib.sh`, which sources `variant.sh`.
-- `scripts/variant.sh` holds each build's version, checksums and
-  `SPLASH_SERVE_ARGS`.
+  Every script sources `lib.sh`, which sources `pins.sh`.
+- `scripts/pins.sh` pins everything downloaded: the mlx-serve tag and commit,
+  Zig, libllama, and the model's repository and revision.
+  `config/model-source.sha256` lists the model's files with their checksums,
+  and `config/convert-requirements.txt` the converter's Python packages.
+- `patches/inkling2-m1.patch` is the M1/M2 patch, applied to upstream's
+  `src/` at build time. `check-patch.sh` checks that it still applies.
 - `config/` holds the tailnet policy and the templates that the setup steps
   install. `render()` in `lib.sh` fills their `@PLACEHOLDERS@`. `config.env`
   is untracked and overrides the defaults in `lib.sh`.
-- Every file describes the current setup. Removed engines and tools stay in
-  git history only.
+- Every file describes the current setup. Removed engines, models and tools
+  stay in git history only.
 
 ## How the server is meant to run
 
-Run the Splash build for the chip as it ships: its checkpoint, the draft it
-pairs with that checkpoint, its API key and its defaults. This repo adds only
-what Splash lacks or what a measurement justifies:
+Run upstream mlx-serve at the pinned tag, built the way its release workflow
+builds it, with only `patches/inkling2-m1.patch` on top. Convert the model
+with upstream's own converter. This repo adds only what upstream lacks or
+what a measurement justifies:
 
-- a LaunchAgent, because Splash ships no service manager
+- the patch, from [namp/mlx-serve-inkling2-m1](https://github.com/namp/mlx-serve-inkling2-m1),
+  kept as a diff against upstream so it can be dropped once upstream ships
+  the same speed on an M1, or carried by this repo if the fork goes quiet
+- a LaunchAgent, because the command-line build ships no service manager
 - the hardening step: pf, sshd and a battery watchdog
-- the flags in `config/com.llmserver.splash.plist` and `SPLASH_SERVE_ARGS`,
-  each with its reason in `docs/findings.md`
+- the flags in `config/com.llmserver.mlx-serve.plist` and the rule in
+  `config/generation-settings.json`, each with its reason in
+  `docs/findings.md`
 
-To change a setting, use Splash's or the port's published numbers when they
-cover the case. When they do not, measure on this machine. Keep the change
-only if the measurement supports it, and record it in `docs/findings.md`.
+To change a setting, use upstream's published numbers when they cover this
+Mac. When they do not, measure here: one change at a time, the current setup
+run before and after it, and the gates in `docs/findings.md` passed. Keep the
+change only if the measurement supports it, and record it there.
 
-When a client does not work, check Splash's and the port's docs and issues
-first. Do not work around the problem with request rewriting or a proxy.
-Record the behaviour and wait for a release.
+When a client does not work, check upstream's docs and issues first. Do not
+work around the problem with request rewriting or a proxy. Record the
+behaviour and wait for a release, or carry a fix in the patch.
 
-A new Splash release is a deliberate bump of the build's block in
-`variant.sh`. Follow "Update Splash" in `README.md`, and run `verify.sh`
-before you keep it.
+A new mlx-serve release is a deliberate bump in `pins.sh`. Follow "Update
+mlx-serve" in `README.md`: rebase the patch first, and drop each part of it
+upstream now ships.
 
 ## Rules
 
 - **Never print the API key or put it on a command line.** A session once
   printed it, and the key had to be replaced. Pass it to curl on stdin with
-  `curl_hdr` from `lib.sh`. Splash gets it in `SPLASH_API_KEY`, which the
-  LaunchAgent reads from the key file at start.
+  `curl_hdr` from `lib.sh`. mlx-serve gets it in `MLX_SERVE_API_KEY`, which
+  the LaunchAgent reads from the key file at start. The Hugging Face token in
+  `~/.cache/huggingface/token` gets the same care.
 - **The repository is public.** Keep usernames, real hostnames, tailnet names,
   IP addresses, home directory paths and email addresses out of every file,
   commit message and PR text. Use the placeholders `<machine>.<tailnet>.ts.net`
@@ -67,6 +79,7 @@ before you keep it.
 - **Commits are unsigned.** Agents work unattended, so nothing waits on a
   1Password signature. GitHub signs each squash merge, so `main` keeps a
   verified history.
+- **Branch and open a PR.** Never push to `main`; the user merges on GitHub.
 
 ## Scripts
 
@@ -74,22 +87,36 @@ before you keep it.
 
   ```sh
   shellcheck -x -s sh scripts/*.sh config/*.sh
-  sh scripts/test-variant.sh
+  sh scripts/check-patch.sh
   sh scripts/check-public.sh
   ```
 
 - Make setup scripts idempotent, and have each one check its own result
   before it reports success. A script that stops the endpoint must say so and
   print how to recover.
+- Check every download against a pin before using it. Upstream's
+  `fetch-zig.sh` and `fetch-llama.sh` check nothing, so `1-install.sh` stages
+  Zig itself and checks the library `fetch-llama.sh` stages.
 - `1-install.sh` and `3-services.sh` run as the user. Homebrew refuses root,
-  and macOS gives Splash the GPU and the Neural Engine only in the user's login
-  session. `2-tailscale.sh`, `4-harden.sh`, `verify.sh` and `uninstall.sh` need
-  sudo.
+  and macOS gives mlx-serve the GPU only in the user's login session.
+  `2-tailscale.sh`, `4-harden.sh`, `verify.sh` and `uninstall.sh` need sudo.
 - Install root-owned files outside the checkout, under `/usr/local/etc/llm-server`,
   `/usr/local/sbin` or `/Library`. Nothing reads this repo at run time.
-- Call Splash by `SPLASH_BIN`, never by a version's folder.
-- Only `lib.sh` sets `SPLASH_VARIANT`, from the chip. A build chosen by hand
-  can install a Splash that refuses the GPU.
+- Call mlx-serve by `MLX_SERVE_BIN`. Its folder is named for the tag and the
+  patch's checksum, so a new pin or patch builds beside the running one.
 - Restart launchd jobs with `start_job` and `stop_job` from `lib.sh`.
   `launchctl bootout` returns before the job is gone, so an immediate
   `bootstrap` fails.
+
+## Measuring
+
+- Stop the server first and run one GPU job at a time. A second job, a model
+  download or a build skews every number.
+- Run the candidate between two runs of the current setup, and keep it only
+  if it beats both on its metric and loses nothing elsewhere by more than
+  about 3%.
+- Score a new model pack against the release with upstream's
+  `tests/inkling2_kld.py` before measuring its speed.
+- Speed alone is not enough: check the long-context needle, the follow-up
+  set and the OpenCode-shaped follow-ups in `docs/findings.md` before a
+  change ships.

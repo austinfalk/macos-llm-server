@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>@MLX_SERVE_LABEL@</string>
+	<!-- The binary's path names its build, so a new pin or patch changes this
+	     file, and 3-services.sh restarts the server onto it. -->
+	<!-- The key reaches mlx-serve in MLX_SERVE_API_KEY, read from the key file
+	     at start, so it is never on a command line or in this plist. An empty
+	     variable would leave mlx-serve open, so the shell refuses to start it. -->
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/sh</string>
+		<string>-c</string>
+		<string>MLX_SERVE_API_KEY=$(head -1 "$0") &amp;&amp; [ -n "$MLX_SERVE_API_KEY" ] || exit 1; export MLX_SERVE_API_KEY; exec "$@"</string>
+		<string>@KEY_FILE@</string>
+		<string>@MLX_SERVE_BIN@</string>
+		<string>--model</string>
+		<string>@LLM_MODEL_DIR@</string>
+		<string>--host</string>
+		<string>127.0.0.1</string>
+		<string>--port</string>
+		<string>@LLM_PORT@</string>
+		<string>--api-key-env</string>
+		<string>MLX_SERVE_API_KEY</string>
+		<string>--api-key-strict</string>
+		<string>--ctx-size</string>
+		<string>262144</string>
+		<string>--prefix-cache-mem</string>
+		<string>24GB</string>
+		<string>--prefill-chunk</string>
+		<string>4096</string>
+		<string>--kv-quant</string>
+		<string>4</string>
+		<string>--log-file</string>
+		<string>off</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>ThrottleInterval</key>
+	<integer>30</integer>
+	<!-- Unset, launchd applies light resource limits that throttle CPU and
+	     I/O (man launchd.plist). -->
+	<key>ProcessType</key>
+	<string>Interactive</string>
+	<key>Umask</key>
+	<integer>63</integer>
+	<key>StandardOutPath</key>
+	<string>@MLX_SERVE_LOG@</string>
+	<key>StandardErrorPath</key>
+	<string>@MLX_SERVE_LOG@</string>
+</dict>
+</plist>

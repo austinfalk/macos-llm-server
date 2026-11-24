@@ -2,24 +2,25 @@
 
 **A private model server on an Apple Silicon Mac.**
 
-These scripts turn a Mac with an M1 or later into a model server that your
-other devices reach over [Tailscale](https://tailscale.com), with an API key
-and nothing else exposed. The model runs on the Mac's GPU and Neural Engine
-with [Splash](https://github.com/incoai/splash), which serves OpenAI
-(chat completions, Responses) and Anthropic (Messages) APIs, so coding agents
-and scripts can use it.
+These scripts turn a Mac with 64 GB into a model server that your other
+devices reach over [Tailscale](https://tailscale.com), with an API key and
+nothing else exposed. It serves Inkling 2 Mini Uncensored on the Mac's GPU
+with [mlx-serve](https://github.com/ddalcu/mlx-serve), which speaks the
+OpenAI (chat completions, Responses), Anthropic (Messages) and Ollama APIs,
+so coding agents and scripts can use it.
 
 ```
-  laptop, phone, CI ──Tailscale──▶ tailscale serve :443 ──▶ Splash 127.0.0.1:8000
+  laptop, phone, CI ──Tailscale──▶ tailscale serve :443 ──▶ mlx-serve 127.0.0.1:8000
                                    TLS, tailnet only        API key, model on the GPU
 ```
 
 When you finish:
 
-- Splash runs in your login session as a LaunchAgent and restarts if it fails.
+- mlx-serve runs in your login session as a LaunchAgent and restarts if it
+  fails.
 - The endpoint is reachable only from your tailnet, and only with the key.
-  Splash listens on loopback only, and Screen Sharing and SSH refuse the local
-  network.
+  mlx-serve listens on loopback only, and Screen Sharing and SSH refuse the
+  local network.
 - The disk is encrypted with FileVault. After `sudo fdesetup authrestart` you
   log in over Screen Sharing on the tailnet, and the server starts. After a
   crash or power cut, someone types the password at the Mac.
@@ -29,35 +30,40 @@ When you finish:
 
 | | |
 |---|---|
-| Mac | Apple Silicon, macOS 26.4 or later, an administrator account |
-| Memory | 36 GB or more for the default model. With less, pick a smaller one before step 5 ([Models](#models)) |
-| Disk | 19 GB for the model and its draft, as measured here, plus Splash's SSD cache, which it sizes itself up to 32 GiB |
-| Software | [Homebrew](https://brew.sh) in `/opt/homebrew`, its default on Apple Silicon, and a [Tailscale](https://tailscale.com) account |
-| Time | Mostly the first download, about 19 GB, plus about 45 s to calibrate the Neural Engine |
+| Mac | Apple Silicon with 64 GB, macOS 26.2 or later, an administrator account |
+| Software | [Homebrew](https://brew.sh) in `/opt/homebrew`, Xcode 26.2 or later with its Metal toolchain, and a [Tailscale](https://tailscale.com) account |
+| Disk | About 42 GB: 20 GB for the release, 17.5 GB for the converted model, 4 GB for the build. Once converted, the release can be deleted, at the cost of downloading it again when an mlx-serve update reconverts |
+| Time | About 10 minutes to build, plus the 20 GB download |
 
-The scripts pick the Splash build for the chip:
+**What runs.** Three pinned parts, each chosen by measurement on an M1 Max
+([findings](docs/findings.md)):
 
-| Chip | Build | Installed from |
-|---|---|---|
-| M3 or later | [Splash](https://github.com/incoai/splash), by Inco | Homebrew formula `incoai/tap/splash`, command `splash` |
-| M1 or M2 | [paperniuk/splash](https://github.com/paperniuk/splash), an unofficial community port, because Splash refuses GPUs older than the M3's | The port's release installer, command `splash-m1` |
+- **mlx-serve** at upstream's tag **26.11.4-pre-release.1**, built from source
+  the way upstream builds its releases, with one patch:
+  [`patches/inkling2-m1.patch`](patches/inkling2-m1.patch), from
+  [namp/mlx-serve-inkling2-m1](https://github.com/namp/mlx-serve-inkling2-m1).
+  It adds FP16 and fused 4-bit-KV attention for M1 and M2 GPUs, and fixes
+  where streamed reasoning goes. The repo carries it as a diff against
+  upstream, so it can be dropped once upstream ships the same.
+- **The model:** [OpenUncensored's Inkling 2 Mini
+  Uncensored](https://huggingface.co/OpenUncensored/Inkling-2-Mini-Uncensored),
+  Thinking Machines' Inkling 2 Mini with refusals ablated: a looped mixture of
+  experts with 26.4B parameters, 3.4B of them active per token, reading text
+  and images. It is pinned by revision and checksum.
+- **The pack:** upstream's converter turns the release into an MLX pack,
+  keeping the experts' released bytes and quantizing attention to 4 bits and
+  the embedding and head to 6. It scores 0.019 KL divergence against the
+  release and 94% top-1 agreement.
 
-Each build is pinned by version and checksum in `scripts/variant.sh`, so
-`brew upgrade` never moves it. Pinned now: Splash **1.7.0** and the port
-**1.6.1-m1.1**. The port's 1.7.0-m1 was tried and rolled back because it wrote
-nonsense in short conversations ([findings](docs/findings.md#upgrades)).
-Everything measured here ran on an M1 Max with 64 GB. The M3-and-later path
-follows Splash's own instructions but has not run on such a Mac here yet.
-
-**Expect it to be private, not fast.** On the M1 Max the default model reads a
-new prompt at about 180-240 tokens a second up to 34K tokens, 120 at 128K and
-80 at 239K. It writes about 37 tokens a second, 29-61 depending on the
-prompt, and 25 deep in a 239K-token conversation. An agent's first turn takes
-35-95 s, and follow-ups start in about a second, because
-Splash caches the conversation.
-Base M1 and M2 chips have fewer GPU cores and will be slower (not measured).
-Newer chips read prompts much faster. Local suits code that must not leave the
-machine, batch and overnight work, and a private endpoint for your scripts.
+**Expect it to be private, not fast.** On the M1 Max it reads a new prompt at
+about 420 tokens a second up to 10K tokens, 380 at 30K, 275 at 129K and 200 at 242K,
+and writes 48 tokens a second, 41 at 36K tokens deep and 28 at 129K. An
+agent's first turn takes 20-50 s, and follow-ups start in under a second,
+because mlx-serve caches the conversation, two long ones at once. An M2
+takes the same patched paths, and an M3 or later upstream's own; neither is
+measured here.
+Local suits code that must not leave the machine, batch and overnight work,
+and a private endpoint for your scripts.
 
 ## Setup
 
@@ -67,18 +73,15 @@ to run again.
 
 **If you are an agent:** run steps 1, 3 and 5 yourself. Hand steps 2, 4, 6 and
 7 to the user, with each command and what it should print: they need the
-Tailscale admin console, a browser login, System Settings or sudo. Step 5 waits
-up to an hour on the first start, so run it in the background and follow
-`~/Library/Logs/llm-server/splash.log`. If it is interrupted, run it again: it
-waits for the server already starting.
+Tailscale admin console, a browser login, System Settings or sudo. Step 3
+builds for 10 minutes and downloads 20 GB, so run it in the background. If it
+is interrupted, run it again: it picks up where it stopped.
 
 ### 1. Get the repository
 
 `git clone` it anywhere and `cd` into it. To change a setting, copy
 `config.env.example` to `config.env` and edit it. Every setting is explained
-there. **On a Mac with less than 36 GB, do this now and set `LLM_MODEL` from
-[Models](#models)**: the default model does not fit, and step 5 downloads
-whatever `LLM_MODEL` names. Every other setting has a working default.
+there and has a working default.
 
 ### 2. Prepare the tailnet
 
@@ -98,20 +101,12 @@ In the [Tailscale admin console](https://login.tailscale.com/admin):
 
 ### 3. Install
 
+Install Xcode from the App Store if it is missing, open it once, then fetch
+its Metal toolchain, which building MLX needs:
+
 ```sh
-sh scripts/1-install.sh
+xcodebuild -downloadComponent MetalToolchain
 ```
-
-As your normal user, not sudo. It checks the chip and macOS, installs
-`tailscale` from Homebrew and the pinned Splash build, and keeps the model cache
-out of Time Machine. It refuses a Splash whose version or checksum differs
-from the pins. On an M3 or later, Homebrew's tap offers only the newest
-Splash, so once Splash releases past the pin the script stops and says so.
-Then follow [Update Splash](#update-splash) to pin the new release, or wait for
-this repository to pin it.
-
-If the Tailscale app is installed, the script warns you. This setup runs
-Homebrew's `tailscaled` instead, so quit and remove the app.
 
 Optional: a Hugging Face **read** token in `~/.cache/huggingface/token` lifts
 the rate limit on anonymous downloads. Paste it after this command, then press
@@ -120,6 +115,31 @@ Ctrl-D:
 ```sh
 ( umask 077; mkdir -p ~/.cache/huggingface && cat > ~/.cache/huggingface/token )
 ```
+
+Then:
+
+```sh
+sh scripts/1-install.sh
+```
+
+As your normal user, not sudo. It:
+
+1. checks the chip, memory, macOS and Xcode;
+2. installs `tailscale`, `cmake`, `webp` and `python@3.12` from Homebrew;
+3. builds mlx-serve: it fetches the pinned tag and checks its commit, stages
+   Zig after checking its checksum, runs upstream's MLX and libllama scripts
+   and checks the library they stage, applies the patch, builds, and lays the
+   result out in `~/.mlx-serve/builds/<build>` as upstream's release does;
+4. downloads the model's files at the pinned revision into
+   `~/.mlx-serve/models/OpenUncensored/Inkling-2-Mini-Uncensored`, eight
+   ranges at a time, and checks each one's checksum;
+5. converts it with upstream's converter, in a Python environment whose
+   packages are pinned by hash, into
+   `~/.mlx-serve/models/local/Inkling-2-Mini-Uncensored-q4attn`.
+
+It keeps `~/.mlx-serve` out of Time Machine. If the Tailscale app is
+installed, the script warns you. This setup runs Homebrew's `tailscaled`
+instead, so quit and remove the app.
 
 ### 4. Join the tailnet
 
@@ -145,19 +165,16 @@ if an SSH session drops with it.
 sh scripts/3-services.sh
 ```
 
-As yourself, not sudo. It generates the API key, installs the LaunchAgent,
-waits for the model, publishes it with `tailscale serve`, and checks that a
-request with the key gets 200 and one without gets 401. The first start
-downloads the model and its draft, about 19 GB, and times the Neural Engine
-against the GPU, which took 42.7 s for the current build. How long the
-download takes depends on your connection, and the script waits up to an
-hour. Later starts take about 30 s.
+As yourself, not sudo. It generates the API key, installs the generation
+defaults and the LaunchAgent, waits for the model to load, publishes it with
+`tailscale serve`, and checks that a request with the key gets 200 and one
+without gets 401.
 
 It prints what clients need:
 
 - Endpoint: `https://<machine>.<tailnet>.ts.net/v1`, with `:PORT` after the
   name if you set `LLM_HTTPS_PORT`
-- Model: `LLM_MODEL`, `mlx-community/Qwen3.8-27B-4bit` by default
+- Model: `Inkling-2-Mini-Uncensored-q4attn`
 - Key: the one line of `~/.config/llm-server/api-key`
 
 Save the key in your password manager now, so client devices can copy it
@@ -213,179 +230,135 @@ sudo sh scripts/verify.sh
 
 Run it while logged in on the Mac, because the server runs in your login
 session. It checks the tailnet (and that Funnel is off), the LaunchAgent, the
-pinned Splash version, that Splash runs as you and not root, that Splash's
-port listens on loopback only, the key (right, wrong, empty, missing,
-both headers), what `/health` reveals, the model ID, that a two-turn question
-gets the right answer, FileVault, pf and SSH. It exits non-zero on any
-failure.
+mlx-serve build, that mlx-serve runs as you and not root, the generation
+defaults, that mlx-serve listens on loopback only, the key (right, wrong,
+empty, missing, both headers), what `/health` reveals, the model ID, that a
+two-turn question gets the right answer, FileVault, pf and SSH. It exits
+non-zero on any failure.
 
 ### 8. Connect clients
 
 Follow [`docs/clients.md`](docs/clients.md) on each client device. Steps 1-2
 join the tailnet and copy the key, step 3 configures OpenCode, and step 4
 checks it. The guide also says what any other OpenAI or Anthropic client
-needs. Splash's own launchers (`splash claude` and the others) reach only a
-server on the same Mac.
-
-## Models
-
-Splash serves a few model families, Qwen3.8-27B and Qwen3.6-35B-A3B among
-them, as MLX checkpoints and Unsloth GGUFs, and pairs each with its DFlash2
-draft by itself ([Splash's model list](https://github.com/incoai/splash#models)).
-Set `LLM_MODEL` in `config.env` to what `--model` takes.
-
-| Mac memory | Model | Notes |
-|---|---|---|
-| 36 GB or more | `mlx-community/Qwen3.8-27B-4bit` (default) | Scores 34 on the Artificial Analysis Intelligence Index v4.3.2. 36 GB is the port's stated requirement *(sourced)*. Run here on 64 GB |
-| 36 GB or more, for speed | `mlx-community/Qwen3.6-35B-A3B-4bit` | 3B parameters active per token, so the port writes about 2.5 times as fast, but it scores 18 *(sourced)* |
-| 24-32 GB | `unsloth/Qwen3.8-27B-GGUF:UD-IQ3_XXS`, or `unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q2_K_XL` | Splash measured both on a 24 GB Mac: the 27B at 43.5 tok/s with 53K tokens of context, the 35B-A3B at 145 tok/s with the full 256K. The port names the 27B for 24 GB *(sourced)*. Not run here |
-| Under 24 GB | None in this guide | The port runs Ternary Bonsai 2 on 16 GB after raising the GPU's memory limit at each boot, with `--language-only` *(sourced)*. The guide's LaunchAgent sets up neither |
-
-Splash sizes memory and context at start and stops with a message if the
-model does not fit. A 27B GGUF small enough for 24 GB gets about 53K tokens of
-context there, too little for coding agents *(sourced)*. The model is also the
-model ID every client sends, so changing it means changing every client.
+needs.
 
 ## Running it
 
 | | |
 |---|---|
-| Status | `curl -s -o /dev/null -w '%{http_code}\n' 127.0.0.1:8000/ready` prints 200 when the model is ready |
-| Restart | `launchctl kickstart -k gui/$(id -u)/com.llmserver.splash` |
-| Stop | `launchctl bootout gui/$(id -u)/com.llmserver.splash`. It starts again at your next login or `3-services.sh` |
-| Log | `~/Library/Logs/llm-server/splash.log`. Nothing rotates it |
-| LaunchAgent | `~/Library/LaunchAgents/com.llmserver.splash.plist`, from `config/com.llmserver.splash.plist`. Change it by re-running `3-services.sh` |
+| Status | `curl -s -o /dev/null -w '%{http_code}\n' 127.0.0.1:8000/health` prints 200 when the model is ready, 503 while it loads |
+| Restart | `launchctl kickstart -k gui/$(id -u)/com.llmserver.mlx-serve` |
+| Stop | `launchctl bootout gui/$(id -u)/com.llmserver.mlx-serve`. It starts again at your next login or `3-services.sh` |
+| Log | `~/Library/Logs/llm-server/mlx-serve.log`. Nothing rotates it |
+| LaunchAgent | `~/Library/LaunchAgents/com.llmserver.mlx-serve.plist`, from `config/com.llmserver.mlx-serve.plist`. Change it by re-running `3-services.sh` |
+| Generation defaults | `~/.mlx-serve/generation-settings.json`, from `config/generation-settings.json`. `3-services.sh` replaces it |
 | API key | `~/.config/llm-server/api-key` |
-| Splash | M3+: `$(brew --prefix)/opt/splash`. M1/M2: `~/Library/Application Support/Splash-M1/<version>`, with `current` linking the version installed last |
-| Splash's data | `~/Library/Application Support/Splash` |
-| Models | `~/.cache/huggingface/hub` |
-| Chat page | The endpoint without `/v1`, such as `https://<machine>.<tailnet>.ts.net/`. It asks for the key |
+| mlx-serve | `~/.mlx-serve/builds/<build>`, one folder per tag and patch, beside the source in `~/.mlx-serve/builds/src`, the converter's Python in `~/.mlx-serve/builds/venv`, and `build.log` |
+| Model | `~/.mlx-serve/models/local/Inkling-2-Mini-Uncensored-q4attn`, converted from `~/.mlx-serve/models/OpenUncensored/Inkling-2-Mini-Uncensored` |
+| Console | The endpoint without `/v1`, such as `https://<machine>.<tailnet>.ts.net/`. It asks for the key |
 
 **After a restart**, log in over Screen Sharing. The server starts with your
-session, and Splash reports Ready about 28 s after it starts. For a planned
+session and answers once the model has loaded, in about 4 s. For a planned
 restart, use `sudo fdesetup authrestart`, which unlocks FileVault once, so the
-Mac reaches the login window with the tailnet up. After a crash or power cut, FileVault
-waits for the password at the Mac itself.
+Mac reaches the login window with the tailnet up. After a crash or power cut,
+FileVault waits for the password at the Mac itself.
 
-### Update Splash
+### Update mlx-serve
 
-Read the release notes first, especially anything about clients or flags the
-LaunchAgent passes. Then change the build's block in `scripts/variant.sh`.
+Read the [release notes](https://github.com/ddalcu/mlx-serve/releases) first,
+especially anything about Inkling, M1 and M2, or the flags the LaunchAgent
+passes. Then:
 
-**M3 or later**, from [Splash's releases](https://github.com/incoai/splash/releases):
+1. In `scripts/pins.sh`, set `MLX_SERVE_TAG` to the new tag and
+   `MLX_SERVE_COMMIT` to the commit it points to
+   (`git ls-remote https://github.com/ddalcu/mlx-serve.git refs/tags/<tag>`).
+   If upstream's `fetch-zig.sh` or `fetch-llama.sh` changed version, set
+   `ZIG_VERSION` and `ZIG_SHA256` from
+   [ziglang.org](https://ziglang.org/download/), and expect
+   `1-install.sh` to stop at the new libllama's checksum: check the release
+   it came from, then set `LLAMA_DYLIB_SHA256` to the checksum it prints.
+2. Run `sh scripts/check-patch.sh`. If the patch no longer applies, rebase
+   it on the new tag. Drop each part upstream now ships: compare upstream's
+   M1 decode and follow-up numbers with the patched build's, and if
+   upstream matches, delete the patch.
+3. Run `sh scripts/1-install.sh`, which builds beside the running version,
+   then `sh scripts/3-services.sh`, which restarts the server onto it, and
+   `sudo sh scripts/verify.sh`.
+4. Measure it as `docs/findings.md` describes, and record the result there.
 
-```sh
-curl -fsSL https://github.com/incoai/splash/releases/download/<version>/SHA256SUMS
-```
-
-Set `SPLASH_VERSION` to the tag, `SPLASH_ARCHIVE_SHA256` to the checksum on
-the `splash-<version>-arm64-macos26.tar.gz` line, and `SPLASH_BOTTLE_SHA256` to
-the one on the `.bottle.tar.gz` line. With several bottles, list each checksum,
-space-separated, in the order `brew info --json=v2 incoai/tap/splash` lists
-them.
-Then:
-
-```sh
-brew update && brew unpin splash
-sh scripts/1-install.sh       # refuses unless the formula matches, then pins again
-sh scripts/3-services.sh
-```
-
-If `1-install.sh` refuses, the tap has not caught up. Run `brew pin splash`
-and try again later.
-
-**M1 or M2**, from [the port's releases](https://github.com/paperniuk/splash/releases):
-
-```sh
-cd "$(mktemp -d)" && curl -fsSLO https://github.com/paperniuk/splash/releases/download/<version>/install-m1.sh
-shasum -a 256 install-m1.sh   # must match the release notes. Read the script
-```
-
-Set `SPLASH_VERSION` to the tag and `SPLASH_INSTALLER_SHA256` to that
-checksum. Then, back in the repository:
-
-```sh
-sh scripts/1-install.sh       # installs beside the old version
-sh scripts/3-services.sh
-```
-
-Old versions stay in `~/Library/Application Support/Splash-M1` until you
-delete them.
-
-On either build, `3-services.sh` sees the new version in the LaunchAgent,
-restarts the server onto it, waits for the model and checks the endpoint. A
-new release recalibrates once. Moving to the current build took the endpoint
-down for 70 s, and 1.7.0-m1, which also timed the chunk pair, for 287 s.
-Clients need no change.
-
-Then run `sudo sh scripts/verify.sh`. Besides the status codes, it asks a
-two-turn question and fails unless the answer is right. The status codes alone
-passed on 1.7.0-m1, which wrote nonsense. If it fails on an M1 or M2, put the previous
-values back in `scripts/variant.sh` and run the two scripts again: the old
-version is still installed. On an M3 or later the tap offers only its newest
-formula, so there is no scripted way back. Stop the server and wait for a
-fixed release. Record the result in `docs/findings.md`.
+To go back, put the previous values in `scripts/pins.sh` and run
+`1-install.sh` and `3-services.sh` again. The old build's folder is still in
+`~/.mlx-serve/builds`, so nothing is rebuilt.
 
 ### Other changes
 
 - **Tailscale:** `brew upgrade tailscale`, then `sudo sh scripts/2-tailscale.sh`,
   which copies the new daemon into place. The tailnet drops while it restarts.
-- **Model:** set `LLM_MODEL` in `config.env`, re-run `3-services.sh`, and give
-  clients the new model ID and context window.
 - **HTTPS port:** set `LLM_HTTPS_PORT` (such as `8443`) and re-run
   `3-services.sh`. It moves the endpoint off the old port. Client URLs then
   carry the port.
 - **Rotate the key:** delete `~/.config/llm-server/api-key`, re-run
-  `3-services.sh`, then update clients. Splash reads the key only at start.
+  `3-services.sh`, then update clients. mlx-serve reads the key only at start.
 - **Remove it:** `sudo sh scripts/uninstall.sh` removes the LaunchAgent,
   `tailscale serve`, the hardening jobs, pf rules and SSH settings. It lists
-  what it leaves on purpose: models, key, logs, Splash, Tailscale, power
-  settings and FileVault.
+  what it leaves on purpose: models, builds, settings, key, logs, Homebrew
+  packages, Tailscale, power settings and FileVault.
 
 ## How it works
 
-Splash ships no service manager, so `3-services.sh` renders
-[`config/com.llmserver.splash.plist`](config/com.llmserver.splash.plist) into
-`~/Library/LaunchAgents`. launchd runs Splash in your login session, where
-macOS gives it the GPU and the Neural Engine. The LaunchAgent runs
-`splash serve` (or `splash-m1 serve`) with three flags, two more on some M1
-and M2 chips, and leaves everything
-else at Splash's defaults:
+The command-line build of mlx-serve ships no service manager, so
+`3-services.sh` renders
+[`config/com.llmserver.mlx-serve.plist`](config/com.llmserver.mlx-serve.plist)
+into `~/Library/LaunchAgents`. launchd runs mlx-serve in your login session,
+where macOS gives it the GPU. The LaunchAgent passes these flags and leaves
+everything else at mlx-serve's defaults
+([findings](docs/findings.md#settings)):
 
-- `--model mlx-community/Qwen3.8-27B-4bit`: the model, and the ID clients use.
-  Splash adds its draft, `incoai/Qwen3.8-27B-DFlash2`, by itself.
-- `--allowed-host <machine>.<tailnet>.ts.net`: Splash answers 403 to unknown
-  Host names, a guard against DNS rebinding, so it must know the name
-  `tailscale serve` passes on. The script reads it from Tailscale.
-- `--default-reasoning-effort medium`: chat completions and Responses requests
-  that name no effort get `medium` instead of the template's `xhigh`, which
-  took far longer for a small gain and sometimes answered empty
-  ([findings](docs/findings.md#reasoning-effort)).
-- `--ane-ffn-share 0.68 --ane-ffn-minimum-rows 512`, on an M1 Max with the
-  port's 1.6.1-m1.1 (0.88 on an M1 Pro, 0.53 on an M2 Max, none on other
-  chips): prompts of 512 tokens or more read as a pair of chunks, the Neural
-  Engine on one while the GPU works on the other, about a quarter faster on
-  10K-token prompts and a little slower under 1K. The M1 Pro and M2 Max
-  values are the port's; the M1 Max's was measured here, a little below the
-  port's 0.735 ([findings](docs/findings.md#prefill-as-a-pair-of-chunks)).
-  From 1.7.0-m1 the port times the pair itself, so the next bump drops them.
+- `--model ~/.mlx-serve/models/local/Inkling-2-Mini-Uncensored-q4attn`.
+  mlx-serve names the model after the folder.
+- `--host 127.0.0.1`, because mlx-serve listens on every interface by default.
+  `tailscale serve` is the only way in.
+- `--port 8000`, where `tailscale serve` sends requests.
+- `--api-key-env MLX_SERVE_API_KEY`. The LaunchAgent's shell reads the key
+  file into that variable and then starts mlx-serve, so the key is never on a
+  command line or in the plist. The shell refuses to start mlx-serve with an
+  empty key, which would leave it open.
+- `--api-key-strict`. By default mlx-serve lets requests from loopback in
+  without the key, and `tailscale serve` connects from loopback, so without
+  this flag the whole tailnet would get in without the key.
+- `--ctx-size 262144`, a fixed window, so clients can configure it.
+- `--prefix-cache-mem 24GB`, so long conversations stay cached.
+- `--prefill-chunk 4096`, which reads as fast as larger chunks and keeps
+  follow-ups at 242K tokens cached.
+- `--kv-quant 4`, which makes decode faster from 8K tokens up, by 22% at
+  129K.
+- `--log-file off`. launchd writes mlx-serve's output to the log already.
 
-Splash listens on 127.0.0.1:8000, its default, so `tailscale serve` is the only
-way in. The LaunchAgent's shell reads the key file into `SPLASH_API_KEY` and
-then starts Splash, so the key is never on a command line or in the plist.
-Splash checks `Authorization: Bearer` or `x-api-key` on every route except
-`/health` (which says only `{"status":"ok"}`), `/ready` and the chat page,
-which sends nothing until you enter the key. The key protects the network
-side: anything running on the Mac as you can read it.
+One more setting lives outside the LaunchAgent.
+`~/.mlx-serve/generation-settings.json` gives a request that names no
+reasoning effort `medium`. Inkling's chat template would think at `high`, and
+clients such as OpenCode name no effort. A request that names an effort keeps
+it ([findings](docs/findings.md#reasoning-effort)).
+
+mlx-serve checks the key, as `Authorization: Bearer` or `x-api-key`, on every
+route except `/health` (which says only `{"status":"ok"}`) and CORS preflight.
+Its console at `/` shows a login page until you enter the key. mlx-serve does
+not check the Host header, so a web page that points its name at 127.0.0.1
+can reach it from a browser on this Mac. Such a page still needs the key. The
+key protects the network side: anything running on the Mac as you can read
+it.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
 | `401` | Missing or wrong key | Use the line in `~/.config/llm-server/api-key`. After changing the file, restart the server |
-| `403` "Host NAME is not allowed" | The client uses another name, or the machine was renamed | Use `https://<machine>.<tailnet>.ts.net`. After a rename, re-run `3-services.sh` |
-| `502` | Splash is not running, usually because nobody logged in since a restart | Log in over Screen Sharing, then check the status |
-| `503` `engine_recovering` | The engine failed and is restarting | Retry. After repeated failures Splash answers `500` `engine_failed`: restart the server and read the log |
+| `502` | mlx-serve is not running, usually because nobody logged in since a restart | Log in over Screen Sharing, then check the status |
+| `503` `loading` | The model is still loading | Wait, then retry |
+| `/health` answers `503` `gpu context lost` | The GPU failed under mlx-serve | Restart the server and read the log |
 | Empty answers | The model used the client's whole output limit thinking | Raise the client's output limit to 32,768 |
+| `1-install.sh` stops at "no Metal compiler" | Xcode or its Metal toolchain is missing | Install Xcode, open it once, run `xcodebuild -downloadComponent MetalToolchain` |
+| `1-install.sh` stops at a checksum | A download differs from its pin | Run it again. If it stops again, upstream changed the file: read why before you change the pin |
 | "something else listens on port 8000" | Another server has the port | Stop the process the message names, then re-run `3-services.sh` |
 | `Bootstrap failed: 5: Input/output error` | A launchd job restarted too quickly | Re-run the script, which waits and retries |

@@ -23,7 +23,6 @@ if [ -f "$LLM_REPO/config.env" ]; then
 	. "$LLM_REPO/config.env"
 fi
 : "${LLM_USER:=${SUDO_USER:-$(id -un)}}"
-: "${LLM_MODEL:=mlx-community/Qwen3.8-27B-4bit}"
 : "${LLM_TAG:=}"
 : "${LLM_HTTPS_PORT:=443}"
 : "${LLM_BATTERY_SHUTDOWN_PCT:=15}"
@@ -32,15 +31,29 @@ fi
 LLM_HOME=$(dscl . -read "/Users/$LLM_USER" NFSHomeDirectory 2>/dev/null | sed -n 's/^NFSHomeDirectory: //p')
 LLM_UID=$(id -u "$LLM_USER" 2>/dev/null)
 KEY_FILE=$LLM_HOME/.config/llm-server/api-key
-# shellcheck source=scripts/variant.sh
-. "$LLM_REPO/scripts/variant.sh"
-CPU_BRAND=$(sysctl -n machdep.cpu.brand_string 2>/dev/null) || CPU_BRAND=
-SPLASH_VARIANT=$(detect_variant "$CPU_BRAND") || SPLASH_VARIANT=
-variant_values "$SPLASH_VARIANT"
-SPLASH_LABEL=com.llmserver.splash
-SPLASH_PLIST=$LLM_HOME/Library/LaunchAgents/$SPLASH_LABEL.plist
-SPLASH_LOG=$LLM_HOME/Library/Logs/llm-server/splash.log
-# Splash's default port: the LaunchAgent passes no --port.
+# shellcheck source=scripts/pins.sh
+. "$LLM_REPO/scripts/pins.sh"
+
+# mlx-serve, built by 1-install.sh. Each build gets its own folder, named for
+# the tag and the patch, so a new pin or patch builds beside the running one,
+# and the LaunchAgent changes to the new folder.
+PATCH=$LLM_REPO/patches/inkling2-m1.patch
+MLX_SERVE_HOME=$LLM_HOME/.mlx-serve/builds
+MLX_SERVE_SRC=$MLX_SERVE_HOME/src
+MLX_SERVE_BUILD=${MLX_SERVE_TAG#v}-inkling2-m1-$(shasum -a 256 "$PATCH" 2>/dev/null | cut -c1-8)
+MLX_SERVE_BIN=$MLX_SERVE_HOME/$MLX_SERVE_BUILD/mlx-serve
+MLX_SERVE_LABEL=com.llmserver.mlx-serve
+MLX_SERVE_PLIST=$LLM_HOME/Library/LaunchAgents/$MLX_SERVE_LABEL.plist
+MLX_SERVE_LOG=$LLM_HOME/Library/Logs/llm-server/mlx-serve.log
+# Rules for the request fields a client leaves out. mlx-serve reads the file
+# again whenever it changes.
+MLX_SERVE_GEN_SETTINGS=$LLM_HOME/.mlx-serve/generation-settings.json
+# The release as downloaded, and the pack 1-install.sh converts from it.
+# mlx-serve names a model after its folder: clients see LLM_MODEL_ID.
+LLM_SOURCE_DIR=$LLM_HOME/.mlx-serve/models/$LLM_SOURCE_REPO
+LLM_MODEL_ID=Inkling-2-Mini-Uncensored-q4attn
+LLM_MODEL_DIR=$LLM_HOME/.mlx-serve/models/local/$LLM_MODEL_ID
+# The LaunchAgent's --port, and what `tailscale serve` proxies to.
 LLM_PORT=8000
 
 # Installed by 2-tailscale.sh, at the paths Tailscale's own installer uses.
@@ -185,29 +198,14 @@ pf_loaded() {
 
 json_value() { printf '%s' "$1" | plutil -extract "$2" raw -o - - 2>/dev/null || :; }
 
-# Every bottle must match, not only one for this macOS: Homebrew pours a bottle
-# built for an earlier macOS when there is none for this one. Auto-update is off
-# for the install, so the tap cannot move after the check. Cleanup is off too:
-# on an upgrade the running server still uses the old version's files until
-# 3-services.sh restarts it.
-install_upstream_splash() {
-	brew tap incoai/tap || die "could not add the Homebrew tap incoai/tap"
-	_json=$(brew info --json=v2 incoai/tap/splash) || die "could not read the formula incoai/tap/splash"
-	_version=$(json_value "$_json" formulae.0.versions.stable)
-	_archive=$(json_value "$_json" formulae.0.urls.stable.checksum)
-	_bottles=$(for _t in $(json_value "$_json" formulae.0.bottle.stable.files); do
-		json_value "$_json" "formulae.0.bottle.stable.files.$_t.sha256"
-	done | paste -s -d ' ' -)
-	[ "$_version $_archive $_bottles" = "$SPLASH_VERSION $SPLASH_ARCHIVE_SHA256 $SPLASH_BOTTLE_SHA256" ] \
-		|| die "incoai/tap/splash is not the Splash this repo pins:
-    version  ${_version:-none} (pinned $SPLASH_VERSION)
-    tarball  ${_archive:-none} (pinned $SPLASH_ARCHIVE_SHA256)
-    bottles  ${_bottles:-none} (pinned $SPLASH_BOTTLE_SHA256)
-Either the local tap is behind (run brew update, then this script again) or
-upstream moved (read its release notes, then bump SPLASH_VERSION and the
-checksums in scripts/variant.sh)."
-	HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install incoai/tap/splash || die "brew install incoai/tap/splash failed"
-	brew pin splash || die "could not pin splash in Homebrew"
+# The version line the installed mlx-serve prints, asked as LLM_USER, who runs
+# the server: `mlx-serve VERSION (BUILD MODE)`.
+mlx_serve_version() {
+	if [ "$(id -u)" = 0 ]; then
+		sudo -u "$LLM_USER" "$MLX_SERVE_BIN" --version
+	else
+		"$MLX_SERVE_BIN" --version
+	fi 2>/dev/null | awk 'NR == 1 && $1 == "mlx-serve" {print $2}'
 }
 
 # --- templates ----------------------------------------------------------------
@@ -218,19 +216,14 @@ render() {
 	_src=$LLM_REPO/config/$1
 	_tmp=$2.tmp.$$
 	[ -f "$_src" ] || die "missing template $_src"
-	# Each word of SPLASH_SERVE_ARGS becomes one ProgramArguments string.
-	_args=
-	for _a in ${SPLASH_SERVE_ARGS:-}; do _args="$_args<string>$_a</string>"; done
 	( umask 077
 	  sed -e "s|@LLM_BATTERY_SHUTDOWN_PCT@|$LLM_BATTERY_SHUTDOWN_PCT|g" \
-	      -e "s|@LLM_MODEL@|$LLM_MODEL|g" \
-	      -e "s|@ENDPOINT_HOST@|${ENDPOINT_HOST:-}|g" \
+	      -e "s|@LLM_MODEL_DIR@|$LLM_MODEL_DIR|g" \
+	      -e "s|@LLM_PORT@|$LLM_PORT|g" \
 	      -e "s|@KEY_FILE@|$KEY_FILE|g" \
-	      -e "s|@SPLASH_BIN@|$SPLASH_BIN|g" \
-	      -e "s|@SPLASH_VERSION@|$SPLASH_VERSION|g" \
-	      -e "s|@SPLASH_LABEL@|$SPLASH_LABEL|g" \
-	      -e "s|@SPLASH_LOG@|$SPLASH_LOG|g" \
-	      -e "s|@SPLASH_SERVE_ARGS@|$_args|g" \
+	      -e "s|@MLX_SERVE_BIN@|$MLX_SERVE_BIN|g" \
+	      -e "s|@MLX_SERVE_LABEL@|$MLX_SERVE_LABEL|g" \
+	      -e "s|@MLX_SERVE_LOG@|$MLX_SERVE_LOG|g" \
 	      "$_src" > "$_tmp" ) || die "could not render $1"
 	if grep -q '@[A-Z_]*@' "$_tmp"; then
 		_left=$(grep -o '@[A-Z_]*@' "$_tmp" | head -1)
