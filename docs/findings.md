@@ -5,7 +5,7 @@ measurements behind them. The server is a MacBook Pro 16" (M1 Max, 32-core
 GPU, 64 GB) on macOS 27.x. Items marked *(sourced)* come from the linked
 references and were not reproduced here. Items marked *(source)* were read
 from mlx-serve's code at the pinned tag, not measured. Everything else was
-measured on 2026-11-23 with the Mac to itself: no other model server, no
+measured on 2026-11-23 and 2026-11-24 with the Mac to itself: no other model server, no
 download or build running, on AC power.
 
 The setup has three parts, each chosen by measurement:
@@ -24,6 +24,13 @@ The setup has three parts, each chosen by measurement:
   of a short prompt and of follow-ups at 2.9K, 10K and 30K tokens, and peak
   wired memory. Times are the client's: decode is tokens after the first over
   the time after it.
+- **Sampled workloads.** OpenCode sends no temperature, so its requests run
+  at the pack's default: temperature 1.0, top-p 1.0, top-k 0. Six short
+  prompts at that default; three whole-file edits, each renaming one function
+  in a 2K- to 9K-character script of this repo and returning the file, diffed
+  against the expected file; and three coding asks at `medium`. mlx-serve's
+  completion-token count for the same text varies by up to 2x between runs
+  and builds, so edits are compared in characters per second.
 - **Controls.** Each candidate ran between two runs of the current best, and
   was kept only if it beat both on its metric and lost nothing else by more
   than about 3%. Run-to-run noise on decode was under 1%.
@@ -49,8 +56,8 @@ The setup has three parts, each chosen by measurement:
 namp's [mlx-serve-inkling2-m1](https://github.com/namp/mlx-serve-inkling2-m1)
 is a fork of upstream at the commit the pinned tag points to: its `src/` tree
 at the base commit is upstream's at 26.11.4-pre-release.1, file for file. The
-fork changes 17 files under `src/` and nothing in the build. This repo carries
-that change as `patches/inkling2-m1.patch` (namp's `83865a4..e18e2ed`, `src/`
+fork changes 29 files under `src/` and nothing in the build. This repo carries
+that change as `patches/inkling2-m1.patch` (namp's `83865a4..c352f28`, `src/`
 only) and applies it to upstream's source, so the fork can be dropped once
 upstream ships the same, and nothing else of the fork is needed. What the
 patch does *(sourced: namp's README)*:
@@ -61,14 +68,22 @@ patch does *(sourced: namp's README)*:
 - Inkling's reasoning sent as `reasoning_content` in a streamed reply without
   tools. Upstream sends it in `content` (upstream issue #1292), so a client
   that sends the answer back sends the reasoning too, and misses the cache.
-- An opt-in draft for M1 and M2 (`INKLING_FORCE_DRAFT=1`), off by default.
+- Expert projections read at 16 and 8 lanes a group, and, when drafted rows
+  are verified, one read of an expert's weights for up to four rows that
+  picked it.
+- Drafting on by default on M1 and M2: the pack's draft head, plus spans
+  copied from the prompt. At a sampled temperature with top-p 1 and top-k 0,
+  the draft and the model share one random draw per position, which keeps
+  the output distribution exact and accepts more drafted tokens.
+  `INKLING_NO_DRAFT=1` turns drafting off.
 
 Both builds were made the same way, by upstream's release recipe at the tag:
 Zig 0.17.0, MLX and mlx-c from the tag's submodules, libllama b12110, `zig
 build -Doptimize=ReleaseFast -Dstrip`, laid out and signed ad hoc as the
 release workflow does. A clean build took 8 minutes, the patched rebuild 3.
 
-On the stock 8-bit pack, two runs of each, alternating:
+The patch's first version (namp's `e18e2ed`), on the stock 8-bit pack, two
+runs of each, alternating:
 
 | Metric | Stock | Patched |
 |---|---|---|
@@ -82,6 +97,31 @@ On the stock 8-bit pack, two runs of each, alternating:
 The patched build is 9% faster at decode and 40% faster to a follow-up's
 first token, and its output matches the stock build's to within 0.0035 KLD,
 less than the pack choices below move it. **Kept.**
+
+### namp's update of 2026-11-24
+
+namp's `e18e2ed..c352f28` added the expert dedup, the narrower kernels and
+default drafting above. On the uncensored pack with the final flags, in the
+order before, update, update with drafting off, before, update:
+
+| Workload | Before | Update | Update, drafting off |
+|---|---|---|---|
+| Short prompts, greedy | 48.0-48.8 tok/s | 49.3 tok/s | 50.6 tok/s |
+| Short prompts, sampled | 47.9-48.2 tok/s | 47.7-48.0 tok/s | 50.0 tok/s |
+| Whole-file edits, sampled | 93-103 chars/s | 178-186 chars/s | 97 chars/s |
+| Coding asks at `medium`, sampled | 47.4-47.5 tok/s | 50.6-53.1 tok/s | 49.3 tok/s |
+| Edits exact, sampled | 15 of 19 | 12 of 19 | 7 of 9 |
+| Decode after 8K / 36K / 71K-token prompts, greedy | 46.2-46.6 / 41.3 / 36.3 tok/s | 45.7-48.0 / 41.3-41.6 / 35.6 tok/s | |
+| Mean KLD against the build before | | 0.0000, top-1 100% | |
+
+Sampling at the pack's default costs the build before nothing on short
+prompts, so greedy numbers hold for OpenCode. The update nearly doubles
+whole-file edits, the work an agent does most, because spans copied from the
+prompt are almost always accepted: 2,980 of 3,129 in one run. Every edit that
+missed, on either build, escaped the quotes inside a `$(...)` by hand; the
+gap in exact edits is inside what 19 runs can tell apart. Greedy edits were
+exact on every build. Drafting off is 4% faster on short sampled prompts and
+loses the edit gain. The update passed every gate. **Kept**, with drafting on.
 
 ## The pack
 
@@ -205,7 +245,7 @@ KV was slower than 4-bit everywhere: 44.6 tok/s short, 24.4 at 129K.
 | `--ssm-checkpoint-max 0` | No change |
 | `--max-concurrent 2` | Inside the controls |
 | `--prefix-cache-disk 40GB` | Follow-ups of two long conversations both read cold, where the RAM cache alone serves one |
-| The patch's M1 draft, `INKLING_FORCE_DRAFT=1` | Decode 50.5 against 51.3-51.6 tok/s, and 1 GB more memory: verifying drafted rows costs more than it saves on an M1, as namp found too |
+| `INKLING_NO_DRAFT=1`, the update's drafting off | 4% faster on short sampled prompts, half the speed on whole-file edits (above) |
 
 The chunk, cache, checkpoint, concurrency and disk rows ran earlier the same
 day on the stock release with the 8-bit pack and full KV. What decided them,
@@ -240,24 +280,30 @@ and chunk:
 
 | Metric | Stock release | Final |
 |---|---|---|
-| Decode, greedy, short prompts | 43.8 tok/s | 47.9 tok/s |
-| Decode at 36K / 71K tokens | not measured | 41.1 / 36.0 tok/s |
-| Decode at 129K / 242K tokens | 22.1 / 16 tok/s | 27.9 (8-bit pack) / 21.7 tok/s |
-| Two requests at once, together | 42.7 tok/s | 45.2 tok/s |
-| Prompt reading at 10K / 30K tokens | not measured / 362-371 tok/s | 427 / 383 tok/s |
-| Cold read, 128.7K / 241.7K tokens | 8.0 / 20.1 min | 7.8 / 20.4 min |
-| First token of a follow-up at 2.9K / 10K / 30K | 0.81 / 0.87 / 1.07 s | 0.49 / 0.53 / 0.64 s |
-| OpenCode-shaped follow-ups at 3K / 12K / 39K | 0.6 / 0.7 / 1.0-1.6 s | 0.55 / 0.6 / 0.72-1.52 s |
+| Decode, greedy, short prompts | 43.8 tok/s | 48.7-49.3 tok/s |
+| Decode, sampled as OpenCode asks, short prompts | not measured | 47.7-48.0 tok/s |
+| Whole-file edits, sampled | not measured | 178-186 chars/s |
+| Decode at 36K / 71K tokens | not measured | 41.3-41.6 / 35.6 tok/s |
+| Decode at 129K / 242K tokens | 22.1 / 16 tok/s | 27.9 (8-bit pack) / 21.7 tok/s, before the update |
+| Two requests at once, together | 42.7 tok/s | 45.4 tok/s |
+| Prompt reading at 10K / 30K tokens | not measured / 362-371 tok/s | 423 / 383 tok/s |
+| Cold read, 128.7K / 241.7K tokens | 8.0 / 20.1 min | 7.7 / 19.6 min |
+| First token of a follow-up at 2.9K / 10K / 30K | 0.81 / 0.87 / 1.07 s | 0.71 / 0.49 / 0.61 s |
+| OpenCode-shaped follow-ups at 3K / 12K / 39K | 0.6 / 0.7 / 1.0-1.6 s | 0.51-0.75 / 0.55 / 1.5-1.6 s |
 | Reasoning split from the answer when streaming without tools | no (#1292) | yes |
-| Two long conversations (129K, 111K), follow-up on each | the first cached, the second read cold | both cached, first token in 1.1 s |
-| Follow-up at 242K tokens | cached, first token 3.3 s | cached, full 205-token answer in 11.9 s |
+| Two long conversations (129K, 111K), follow-up on each | the first cached, the second read cold | both cached, first token in 0.9-1.0 s |
+| Follow-up at 242K tokens | cached, first token 3.3 s | cached, full 212-token answer in 9.3 s |
 | Graded follow-ups | 16 of 16 | 16 of 16 |
 | Three codes in a 129K / 242K-token prompt | 3 of 3 / 3 of 3 | 3 of 3 (8-bit pack) / 3 of 3 |
-| Start to ready, pack in the page cache | 2-4 s | 3.8 s |
+| Start to ready, pack in the page cache | 2-4 s | 3.3 s |
 | Peak wired memory, panel | 37-39 GB | 28 GB |
 
 The first token of a short prompt varied from 295 to 500 ms between runs of
-the same setup, so it is not compared.
+the same setup, so it is not compared. The 2.9K follow-up took 0.49 s before
+the update and 0.71 s after it in one panel each, while the OpenCode-shaped
+3K follow-ups took 0.51-0.75 s after it. The 39K OpenCode-shaped follow-up
+read 256 new tokens after the update against 41 before, because the earlier
+answer was longer.
 
 ## What mlx-serve's notes say about this model
 
