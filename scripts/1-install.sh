@@ -62,7 +62,9 @@ else
 	if [ ! -d "$S/.git" ]; then
 		git -c advice.detachedHead=false clone -q --depth 1 --branch "$MLX_SERVE_TAG" "$MLX_SERVE_GIT" "$S" || die "could not clone $MLX_SERVE_GIT"
 	else
-		git -C "$S" fetch -q --depth 1 origin tag "$MLX_SERVE_TAG" || die "could not fetch $MLX_SERVE_TAG"
+		# --force: a tag upstream moved replaces the local one, so the commit
+		# check below reports the move instead of the fetch failing.
+		git -C "$S" fetch -q --force --depth 1 origin tag "$MLX_SERVE_TAG" || die "could not fetch $MLX_SERVE_TAG"
 	fi
 	# Back to the tag as committed: drops last build's patch, keeps the build
 	# outputs, which git ignores.
@@ -97,27 +99,40 @@ else
 
 	# Laid out and signed as upstream's release workflow packages the command
 	# line build: the binary, with its libraries in lib/ beside it.
+	rm -rf "$MLX_SERVE_HOME"/.staging.*
 	out=$MLX_SERVE_HOME/.staging.$$
-	rm -rf "$out"; mkdir -p "$out/lib"
-	cp "$S/zig-out/bin/mlx-serve" "$S/LICENSE" "$S/LICENSE-APACHE-2.0" "$S/NOTICE" "$out/"
-	cp "$S"/lib/mlx/lib/*.dylib "$S/lib/mlx/lib/mlx.metallib" "$S/lib/llama/lib/libllama.dylib" "$out/lib/"
-	webp=$(brew --prefix webp)/lib
-	cp "$webp/libwebp.dylib" "$webp/libsharpyuv.dylib" "$out/lib/"
+	trap 'rm -rf "${tmp:-}" "$out"' EXIT
 	b=$out/mlx-serve
-	# Each change voids the library's signature, with a warning; all are signed again below.
-	install_name_tool -change @rpath/libmlxc.dylib @executable_path/lib/libmlxc.dylib "$b"
-	install_name_tool -change @rpath/libllama.dylib @executable_path/lib/libllama.dylib "$b"
-	install_name_tool -change "$(otool -L "$b" | awk '/libwebp/ {print $1}')" @executable_path/lib/libwebp.dylib "$b"
-	install_name_tool -change @rpath/libmlx.dylib @loader_path/libmlx.dylib "$out/lib/libmlxc.dylib"
-	install_name_tool -change "$(otool -L "$out/lib/libwebp.dylib" | awk '/libsharpyuv/ {print $1}')" @loader_path/libsharpyuv.dylib "$out/lib/libwebp.dylib" 2>/dev/null
+	webp=$(brew --prefix webp)/lib
+	# Each install_name_tool change voids a signature, with a warning on
+	# stderr; everything is signed again after.
+	{
+		mkdir -p "$out/lib" &&
+		cp "$S/zig-out/bin/mlx-serve" "$S/LICENSE" "$S/LICENSE-APACHE-2.0" "$S/NOTICE" "$out/" &&
+		cp "$S"/lib/mlx/lib/*.dylib "$S/lib/mlx/lib/mlx.metallib" "$S/lib/llama/lib/libllama.dylib" \
+			"$webp/libwebp.dylib" "$webp/libsharpyuv.dylib" "$out/lib/" &&
+		install_name_tool -change @rpath/libmlxc.dylib @executable_path/lib/libmlxc.dylib \
+			-change @rpath/libmlx.dylib @executable_path/lib/libmlx.dylib \
+			-change @rpath/libllama.dylib @executable_path/lib/libllama.dylib \
+			-change "$(otool -L "$b" | awk '/libwebp/ {print $1}')" @executable_path/lib/libwebp.dylib "$b" &&
+		install_name_tool -change @rpath/libmlx.dylib @loader_path/libmlx.dylib "$out/lib/libmlxc.dylib" &&
+		install_name_tool -change "$(otool -L "$out/lib/libwebp.dylib" | awk '/libsharpyuv/ {print $1}')" \
+			@loader_path/libsharpyuv.dylib "$out/lib/libwebp.dylib"
+	} 2>>"$MLX_SERVE_HOME/build.log" || die "could not lay out the build: see $MLX_SERVE_HOME/build.log"
+	# The build's own search paths point back into the source tree, which from
+	# here resolve outside the build folder. Keep only the folder's lib/.
+	otool -l "$b" | awk '$1 == "path" {print $2}' | grep -v -x '@executable_path/lib' | while read -r r; do
+		install_name_tool -delete_rpath "$r" "$b" 2>/dev/null || die "could not remove the search path $r"
+	done
 	install_name_tool -add_rpath @loader_path "$out/lib/libmlx.dylib" 2>/dev/null || :
-	for l in "$out"/lib/*.dylib; do codesign --force --sign - "$l" 2>/dev/null; done
-	codesign --force --sign - --entitlements "$S/app/mlx-serve.entitlements" "$b" 2>/dev/null
-	stray=$(otool -L "$b" | awk 'NR > 1 {print $1}' | grep -v -E '^(/usr/lib/|/System/|@executable_path/|@rpath/)') || :
+	for l in "$out"/lib/*.dylib; do codesign --force --sign - "$l" 2>/dev/null || die "could not sign $l"; done
+	codesign --force --sign - --entitlements "$S/app/mlx-serve.entitlements" "$b" 2>/dev/null || die "could not sign mlx-serve"
+	stray=$(otool -L "$b" | awk 'NR > 1 {print $1}' | grep -v -E '^(/usr/lib/|/System/|@executable_path/lib/)') || :
 	[ -z "$stray" ] || die "the build links a library it does not carry: $stray"
 	[ "$("$b" --version 2>/dev/null | awk 'NR == 1 {print $2}')" = "$MLX_SERVE_BUILD" ] || die "the staged mlx-serve does not report $MLX_SERVE_BUILD"
 	rm -rf "${MLX_SERVE_HOME:?}/$MLX_SERVE_BUILD"
 	mv "$out" "$MLX_SERVE_HOME/$MLX_SERVE_BUILD"
+	trap - EXIT
 	ok "mlx-serve $MLX_SERVE_BUILD built ($MLX_SERVE_BIN)"
 fi
 
@@ -135,11 +150,16 @@ fetch() {  # PATH [RANGE]
 }
 size_of() { stat -f %z "$1" 2>/dev/null || echo 0; }
 mkdir -p "$LLM_SOURCE_DIR"
-converted=$LLM_MODEL_DIR/.converted-$LLM_SOURCE_REVISION-$MLX_SERVE_COMMIT
+converted=$LLM_MODEL_DIR/.converted-$LLM_MODEL_PIN
 stamp=$LLM_SOURCE_DIR/.verified-$LLM_SOURCE_REVISION
+all_there() {
+	grep -v '^#' "$LLM_REPO/config/model-source.sha256" | while read -r sum size f; do
+		[ "$(size_of "$LLM_SOURCE_DIR/$f")" = "$size" ] || return 1
+	done
+}
 if [ -f "$converted" ]; then
-	ok "not needed: the model is converted already, so the release may be deleted"
-elif [ -f "$stamp" ]; then
+	ok "not needed: the model is converted. The release can be deleted; an mlx-serve update downloads it again to convert"
+elif [ -f "$stamp" ] && all_there; then
 	ok "$LLM_SOURCE_REPO at ${LLM_SOURCE_REVISION%"${LLM_SOURCE_REVISION#????????}"}, checked before"
 else
 	info "$LLM_SOURCE_REPO: about 20 GB"
@@ -152,20 +172,34 @@ else
 		fi
 		# A big file comes down as 8 ranges at once, each kept once it is whole,
 		# so a rerun fetches only the ranges it is missing.
-		part=$(( (size + 7) / 8 )); i=0
+		part=$(( (size + 7) / 8 )); pids=
+		trap 'kill $pids 2>/dev/null' INT TERM
+		i=0
 		while [ $i -lt 8 ]; do
 			a=$((i * part)); z=$((a + part - 1)); [ $z -lt "$size" ] || z=$((size - 1))
 			if [ "$(size_of "$dest.part$i")" != $((z - a + 1)) ]; then
 				fetch "$f" "$a-$z" > "$dest.part$i" &
+				pids="$pids $!"
 			fi
 			i=$((i + 1))
 		done
 		wait
-		i=0; parts=
-		while [ $i -lt 8 ]; do parts="$parts $dest.part$i"; i=$((i + 1)); done
-		# shellcheck disable=SC2086
-		cat $parts > "$dest" && rm -f $parts
-		[ "$(size_of "$dest")" = "$size" ] || { rm -f "$dest"; die "$f did not download whole. Run this script again to resume"; }
+		trap - INT TERM
+		# Every range whole before they are joined; a short one is fetched
+		# again on the next run, and the others are kept.
+		set --
+		i=0
+		while [ $i -lt 8 ]; do
+			a=$((i * part)); z=$((a + part - 1)); [ $z -lt "$size" ] || z=$((size - 1))
+			if [ "$(size_of "$dest.part$i")" != $((z - a + 1)) ]; then
+				rm -f "$dest.part$i"
+				die "part $i of $f did not download whole. Run this script again to resume"
+			fi
+			set -- "$@" "$dest.part$i"
+			i=$((i + 1))
+		done
+		cat "$@" > "$dest" && rm -f "$@"
+		[ "$(size_of "$dest")" = "$size" ] || { rm -f "$dest"; die "$f did not join whole. Run this script again"; }
 	done
 	info "checking SHA-256 of every file"
 	grep -v '^#' "$LLM_REPO/config/model-source.sha256" | while read -r sum size f; do

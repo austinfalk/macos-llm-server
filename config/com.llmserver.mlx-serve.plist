@@ -4,8 +4,9 @@
 <dict>
 	<key>Label</key>
 	<string>@MLX_SERVE_LABEL@</string>
-	<!-- The binary's path names its build, so a new pin or patch changes this
-	     file, and 3-services.sh restarts the server onto it. -->
+	<!-- The binary's path names its build, and this names the model's
+	     conversion, @LLM_MODEL_PIN@, so a new pin or patch changes this file,
+	     and 3-services.sh restarts the server onto it. -->
 	<!-- The key reaches mlx-serve in MLX_SERVE_API_KEY, read from the key file
 	     at start, so it is never on a command line or in this plist. An empty
 	     variable would leave mlx-serve open, so the shell refuses to start it. -->

@@ -94,8 +94,10 @@ so `1-install.sh` converts it with upstream's own
 `tests/convert_inkling2.py`, which keeps the routed experts' bytes (NVFP4 and
 MXFP8) and quantizes the rest.
 
-Five packs, each scored against its own release, all on the patched engine
-with the base flags:
+Five packs, decode on the patched engine with the base flags. The uncensored
+packs are scored against the uncensored release; the stock 4-bit pack against
+the stock 8-bit pack, since the stock release was not downloaded here (the
+8-bit pack's card puts it at 0.0040 from its release *(sourced)*):
 
 | Pack | Built by | Decode | Mean KLD | Top-1 | Perplexity |
 |---|---|---|---|---|---|
@@ -109,8 +111,8 @@ with the base flags:
   one, and reads prompts as fast. Against the stock pack, its output differs
   by 0.0177 KLD, about what 4-bit attention costs.
 - **4-bit attention is 7.5% faster at decode**, at 0.019 KLD and 94% top-1
-  agreement. Prompt reading and follow-ups are unchanged. It also frees 1.5
-  GB, which mlx-serve gives to the prefix cache.
+  agreement. Prompt reading and follow-ups are unchanged, and the pack is
+  17.5 GB against the 8-bit pack's 18.7.
 - **Upstream's converter matches namp's requant.** Converted from the release
   in one step, it scores the same as namp's two steps (release to 8-bit to
   4-bit) and decodes as fast, so the install needs nothing of namp's but the
@@ -172,20 +174,22 @@ too.
 
 The KV cache grows with the conversation, and decode reads all of it for every
 token, so decode slows as a conversation gets longer. In 4 bits it reads a
-quarter of the bytes, through the patch's fused kernel. Decode of the final
-pack, KV in full against 4 bits, with full KV run before and after:
+quarter of the bytes, through the patch's fused kernel. Decode of the
+uncensored 4-bit pack, KV in full against 4 bits, with full KV run before and
+after. The deep rows used namp's requant, which decodes as fast as the final
+pack, and the 129K row the stock 8-bit pack:
 
 | Prompt | Full KV | 4-bit KV |
 |---|---|---|
-| 2K tokens (the panel) | 48.0 tok/s | 45.0 tok/s |
+| Short (the panel) | 51.3-51.6 tok/s | 47.9 tok/s |
 | 8K | 45.6 | 45.9 |
 | 36K | 37.2 | 41.1 |
 | 71K | 30.6 | 36.0 |
-| 129K (the 8-bit pack) | 22.8 | 27.9 |
+| 129K | 22.8 | 27.9 |
 
-4-bit KV loses 6% on short prompts and wins from 8K tokens up, by 18% at 71K
+4-bit KV loses 7% on short prompts and wins from 8K tokens up, by 18% at 71K
 and 22% at 129K. An agent's first prompt is already 8-20K tokens. Prompt
-reading is unchanged, peak wired memory falls by 11.6 GB, and mlx-serve's
+reading is unchanged, peak wired memory falls by 11.6 GB (39.6 to 28.0), and mlx-serve's
 cache grant grows from 17.2 to about 23 GB. The 129K needle passed 3 of 3. 8-bit
 KV was slower than 4-bit everywhere: 44.6 tok/s short, 24.4 at 129K.
 **Kept: 4-bit.**
