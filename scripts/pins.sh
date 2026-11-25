@@ -13,7 +13,7 @@ MLX_SERVE_GIT=https://github.com/ddalcu/mlx-serve.git
 MLX_SERVE_TAG=v26.11.4-pre-release.1
 MLX_SERVE_COMMIT=2fe9be834a601c70ef1a597563026340f0e722fe
 # patches/inkling2-m1.patch is namp/mlx-serve-inkling2-m1's change to src/,
-# `git diff 83865a4a e18e2ed5 -- src`: its base commit carries the same src/
+# `git diff 83865a4a c352f288 -- src`: its base commit carries the same src/
 # tree as this tag.
 
 # Zig, which upstream's scripts/fetch-zig.sh downloads without a checksum.
