@@ -446,9 +446,27 @@ The first token of a short prompt varied from 295 to 500 ms between runs of
 the same setup, so it is not compared. A follow-up's full answer at 242K takes as long as its reasoning runs, at
 about 20 tokens a second.
 
-One of the three greedy edits sometimes stops early, at about 3,600 of its
-7,100 tokens. It does so on this build and on the one before it, in about
-half their runs. The other two edits always came back exact.
+One edit, a rename in `verify.sh`, sometimes comes back wrong. The model
+writes the whole file but puts a backslash before each double quote of an awk
+program inside `$(...)`, so awk cannot parse the line. The other two edits
+always came back exact. The model makes this mistake on every pack and build
+tried, 16 tries each, sampled at effort `none`:
+
+| Setup | Exact |
+|---|---|
+| This setup, two runs | 9 and 13 of 16 |
+| This setup, drafting off | 12 of 16 |
+| Uncensored, 8-bit | 9 of 16 |
+| Stock, 8-bit, the pack mlx-serve publishes | 11 of 16 |
+
+Every miss was the same backslash, and the spread between setups is within
+that between two runs of this one. Neither the drafter, the 4-bit attention
+nor the uncensored weights cause it. It comes with shorter reasoning: tries
+that reasoned past 3,000 characters were exact 11 of 13 times, shorter ones
+43 of 67. At effort `medium`, which `config/generation-settings.json` gives
+clients, this setup was exact 18 of 20 times. Greedy runs split the same way,
+because the GPU's sums are not bit-identical from run to run and the first
+few tokens of reasoning decide which way it goes.
 
 ### How close to the limit
 
