@@ -3,7 +3,19 @@
 A guide and scripts for running a private model server on an Apple Silicon Mac
 with 64 GB: [mlx-serve](https://github.com/ddalcu/mlx-serve) serving
 Inkling 2 Mini Uncensored, behind `tailscale serve`. mlx-serve is built from
-upstream's source with one patch for M1 and M2 GPUs.
+upstream's source with two patches for M1 and M2 GPUs.
+
+## The goal
+
+Inkling 2 Mini, in MLX weights, decoding on this M1 Max (64 GB) as fast as its
+memory bandwidth and KV cache allow, with speculative decoding on. Every
+choice serves that goal and none is fixed: the engine (mlx-serve, Splash or
+one of our own), the patches (namp's, paperniuk's, ours or none), and the
+model (stock or uncensored) can each change when a measurement shows the
+change gets closer. Use anyone's work, ours included, or none of it. MLX
+weights only: convert a model that ships in another format, never serve a
+GGUF. `docs/findings.md`, "How close to the limit", gives the ceiling and how
+far the current setup is from it.
 
 **Read `NEXT.md` first if it exists.** It is untracked and holds the state of
 the machine this checkout runs on and the work left on it.
@@ -35,7 +47,8 @@ scripts do not run there.
 
 ## How the server is meant to run
 
-Run upstream mlx-serve at the pinned tag, built the way its release workflow
+This is the setup measured closest to the goal so far. Run upstream mlx-serve
+at the pinned tag, built the way its release workflow
 builds it, with only the two patches in `patches/` on top. Convert the model
 with upstream's own converter. This repo adds only what upstream lacks or
 what a measurement justifies:

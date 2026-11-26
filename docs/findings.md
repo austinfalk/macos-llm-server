@@ -8,7 +8,10 @@ from mlx-serve's code at the pinned tag, not measured. Everything else was
 measured on 2026-11-23, 2026-11-24 and 2026-11-25 with the Mac to itself: no other model
 server, no download or build running, on AC power.
 
-The setup has three parts, each chosen by measurement:
+The goal is Inkling 2 Mini, in MLX weights, decoding at the limit this Mac's
+memory bandwidth and KV cache set, with speculative decoding on
+([How close to the limit](#how-close-to-the-limit)). The setup has three
+parts, each chosen by measurement and replaceable by a faster one:
 
 | Part | Choice | Against |
 |---|---|---|
