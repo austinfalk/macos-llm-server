@@ -21,10 +21,41 @@ index d9aa2a0..d083964 100644
      var n: usize = 0;
      while (n < lim) : (n += 1) {
 diff --git a/src/plugins/inkling2/kernels.zig b/src/plugins/inkling2/kernels.zig
-index 18e7846..2701164 100644
+index 18e7846..06ce76e 100644
 --- a/src/plugins/inkling2/kernels.zig
 +++ b/src/plugins/inkling2/kernels.zig
-@@ -825,7 +825,7 @@ fn attend(c: *block.Ctx, L: *const Layer, w: *const Body, p: *const Prep, sinks:
+@@ -681,6 +681,12 @@ pub fn commit(c: *block.Ctx, cfg: *const Config, opens: []const Open, rows: c_in
+ /// `layers.attend`: appends the visit's k and v, reads under the bias and the `sinks`, gates. An `open` verify reads
+ /// the cache's rows with its own behind them and appends nothing.
+ /// `raw`: one row's read is returned without its output gate, which `oGated` folds into the output projection.
++/// Splits of a cached-KV read: one per 128 keys, at most 64. A one-row read is otherwise 4 threadgroups a core on
++/// an M1 Max; this measured 1.5-5% faster decode from 18K to 71K keys (docs/findings.md).
++fn splitsFor(t_k: c_int) c_int {
++    return std.math.clamp(@divTrunc(t_k + 127, 128), 1, 64);
++}
++
+ fn qkvInk2(g: *Graph, q: Array, dv: anytype, scale: f32, c_attn_scale: Array, bias: Array, sinks: Array, out_gate: ?Array) !Array {
+     const qsh = ops.shape(q);
+     const h_q = qsh[1];
+@@ -690,7 +696,7 @@ fn qkvInk2(g: *Graph, q: Array, dv: anytype, scale: f32, c_attn_scale: Array, bi
+     const t_k = ksh[2];
+     const gqa = @divExact(h_q, h_kv);
+     const dt = ops.dtype(q);
+-    const nsplit: c_int = std.math.clamp(@divTrunc(t_k + 255, 256), 1, 16);
++    const nsplit: c_int = splitsFor(t_k);
+     const scl = if (c_attn_scale.ctx != null) c_attn_scale else try g.fromSlice(f32, &.{scale}, &.{1});
+     const tk = try g.fromSlice(i32, &.{t_k}, &.{1});
+     const parts = try launchGrid(
+@@ -764,7 +770,7 @@ fn qkvInk2Verify(g: *Graph, L: *const Layer, cfg: *const Config, p: *const Prep,
+     const vq = if (from > 0) try g.sliceAxis(dv.v_triple_q, 2, from, rows) else dv.v_triple_q;
+     const vsc = if (from > 0) try g.sliceAxis(dv.v_triple_scales, 2, from, rows) else dv.v_triple_scales;
+     const vbi = if (from > 0) try g.sliceAxis(dv.v_triple_biases, 2, from, rows) else dv.v_triple_biases;
+-    const nsplit: c_int = std.math.clamp(@divTrunc(t_k + 255, 256), 1, 16);
++    const nsplit: c_int = splitsFor(t_k);
+     const scl = try g.fromSlice(f32, &.{1.0 / @sqrt(@as(f32, @floatFromInt(hd)))}, &.{1});
+     const tk = try g.fromSlice(i32, &.{t_k}, &.{1});
+     const parts = try launchGrid(
+@@ -825,7 +831,7 @@ fn attend(c: *block.Ctx, L: *const Layer, w: *const Body, p: *const Prep, sinks:
          const dt = ops.dtype(p.q);
          o.k = try o.g.keep(p.k);
          o.v = try o.g.keep(p.v);
@@ -78,10 +109,10 @@ index e1470e6..47fbaa2 100644
  
  // 3) Combine 4 simdgroups in threadgroup
 diff --git a/src/plugins/inkling2/plugin.zig b/src/plugins/inkling2/plugin.zig
-index 87c6def..e880cd0 100644
+index 33542b8..b6a4818 100644
 --- a/src/plugins/inkling2/plugin.zig
 +++ b/src/plugins/inkling2/plugin.zig
-@@ -442,7 +442,7 @@ fn openRound(m: *Loaded, f: *const abi.Forward, stochastic: bool) !Opened {
+@@ -459,7 +459,7 @@ fn openRound(m: *Loaded, f: *const abi.Forward, stochastic: bool) !Opened {
  
      o.started = nowUs();
      if (o.drafts == 0) {
@@ -90,7 +121,7 @@ index 87c6def..e880cd0 100644
          if (!v.isOk()) return error.Inkling2DraftRound;
          return o;
      }
-@@ -450,11 +450,16 @@ fn openRound(m: *Loaded, f: *const abi.Forward, stochastic: bool) !Opened {
+@@ -467,11 +467,16 @@ fn openRound(m: *Loaded, f: *const abi.Forward, stochastic: bool) !Opened {
      @memset(o.opens, .{ .g = g });
      sp.?.opens = o.opens;
      defer sp.?.opens = null;

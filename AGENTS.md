@@ -32,8 +32,9 @@ scripts do not run there.
 - `scripts/` holds the numbered setup steps, `verify.sh` and `uninstall.sh`.
   Every script sources `lib.sh`, which sources `pins.sh`.
 - `scripts/pins.sh` pins everything downloaded: the mlx-serve tag and commit,
-  Zig, libllama, and the model's repository and revision.
-  `config/model-source.sha256` lists the model's files with their checksums,
+  Zig, libllama, and the repository and revision of the model and its draft
+  model. `config/model-source.sha256` and `config/draft-source.sha256` list
+  their files with checksums,
   and `config/convert-requirements.txt` the converter's Python packages.
 - `patches/inkling2-m1.patch` is namp's M1/M2 patch, and
   `patches/inkling2-m1-speed.patch` this repo's changes on top of it. Both are

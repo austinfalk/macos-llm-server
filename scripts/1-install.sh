@@ -211,6 +211,27 @@ else
 	ok "$LLM_SOURCE_REPO downloaded and checked"
 fi
 
+step "Draft model"
+# Inco's DFlash 2 drafter, as released, at the pinned revision: two files.
+base=https://huggingface.co/$LLM_DRAFT_REPO/resolve/$LLM_DRAFT_REVISION
+mkdir -p "$LLM_DRAFT_DIR"
+dstamp=$LLM_DRAFT_DIR/.verified-$LLM_DRAFT_REVISION
+if [ -f "$dstamp" ]; then
+	ok "$LLM_DRAFT_REPO at ${LLM_DRAFT_REVISION%"${LLM_DRAFT_REVISION#????????}"}, checked before"
+else
+	info "$LLM_DRAFT_REPO: about 1 GB"
+	grep -v '^#' "$LLM_REPO/config/draft-source.sha256" | while read -r sum size f; do
+		dest=$LLM_DRAFT_DIR/$f
+		if [ "$(size_of "$dest")" != "$size" ]; then
+			{ fetch "$f" > "$dest.part" && mv "$dest.part" "$dest"; } || die "could not download $f of $LLM_DRAFT_REPO. Run this script again"
+		fi
+		got=$(shasum -a 256 "$dest" | awk '{print $1}')
+		[ "$got" = "$sum" ] || { rm -f "$dest"; die "$f of $LLM_DRAFT_REPO has SHA-256 $got, not the pinned $sum. Deleted it: run this script again"; }
+	done
+	touch "$dstamp"
+	ok "$LLM_DRAFT_REPO downloaded and checked"
+fi
+
 step "Model conversion"
 # mlx-serve reads MLX packs. Upstream's own converter writes one from the
 # release: the routed experts keep the release's bytes; the attention goes

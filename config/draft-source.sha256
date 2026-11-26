@@ -1,0 +1,4 @@
+# The files of incoai/Inkling-2-Mini-DFlash2 that namp's DFlash 2 drafter reads, at the revision
+# scripts/pins.sh pins: SHA-256, size in bytes, path. scripts/1-install.sh downloads these and nothing else.
+d094e435eb939e01fca6297f637c5af35e3da4b552f8e1ab0a181cd278a1cefa 1311 config.json
+217980ab00d116693fa5946df7bbfd967caf5fac1f529afd541fbd470ddb54ee 989975616 model.safetensors

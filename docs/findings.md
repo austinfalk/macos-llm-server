@@ -130,9 +130,35 @@ gap in exact edits is inside what 19 runs can tell apart. Greedy edits were
 exact on every build. Drafting off is 4% faster on short sampled prompts and
 loses the edit gain. The update passed every gate. **Kept**, with drafting on.
 
+### DFlash 2, namp's update of 2026-11-25
+
+namp's `c352f28..ab16dcb3` adds a drafter in Metal for Inco's DFlash 2 model
+([incoai/Inkling-2-Mini-DFlash2](https://huggingface.co/incoai/Inkling-2-Mini-DFlash2),
+1 GB in BF16, quantized to 8 bits at load). It replaces the pack's own draft
+head, and copied spans still come first; acceptance stays exact. The
+LaunchAgent names its folder in `INKLING_DFLASH2_DIR`, and `1-install.sh`
+downloads it, pinned by revision and checksum. The same commit adds a tool
+that grafts Lucebox's "Fast" fine-tune into every layer's attention output
+projection: a different model, on the tensors that hold OpenUncensored's
+ablation, so it was not tried.
+
+Against the build before it, in the order before, DFlash 2, before,
+DFlash 2, with this repo's patch on both:
+
+| Workload | Before | DFlash 2 |
+|---|---|---|
+| Decode, greedy, short | 55.0-55.8 tok/s | 56.8-57.7 tok/s |
+| Decode, sampled as OpenCode asks | 55.1-55.6 tok/s | 56.2-56.9 tok/s |
+| Thinking at `medium` | 57.6-58.3 tok/s | 59.5-60.0 tok/s |
+| Tokens accepted in a 7-row round | 4.09 | 4.56-4.70 |
+| The drafter's time a round | 6.7 ms | 7.4 ms |
+
+Edits, two and four requests at once, and prompt reading did not move.
+**Kept.**
+
 ### This repo's patch
 
-`patches/inkling2-m1-speed.patch` changes 16 lines of namp's code, in two
+`patches/inkling2-m1-speed.patch` changes 24 lines of namp's code, in three
 parts. Measured on the uncensored 4-bit pack with the final flags and command
 buffers, each part between two runs of the build before it.
 
@@ -172,6 +198,20 @@ limit:
 
 Every edit came back exact. Short decode and thinking did not move. Without
 the kernel fix, 16 rows at 31K took 200 ms and lost to 7.
+
+**More threadgroups for the cached-KV read.** One row's read of the cache
+split its keys 256 at a time into at most 16 parts: 128 threadgroups at 4K
+keys and up, 4 to a core. 128 keys a part and at most 64 parts:
+
+| Decode after a prompt of | 256 keys, 16 parts | 128 keys, 64 parts |
+|---|---|---|
+| 18K tokens | 50.3-50.4 tok/s | 51.1 tok/s |
+| 36K tokens | 45.7-45.8 tok/s | 46.9 tok/s |
+| 71K tokens | 39.2-39.7 tok/s | 41.7 tok/s |
+
+32 or 64 parts at 256 keys came between the two. A trace at 36K shows the
+read is limited by arithmetic, not bandwidth (read bandwidth falls, the ALU
+limiter rises), so more parts help only a little.
 
 ### Splash 1.7.3-m1
 
@@ -343,6 +383,11 @@ KV was slower than 4-bit everywhere: 44.6 tok/s short, 24.4 at 129K.
 | `INKLING_NO_DRAFT=1`, the update's drafting off | 4% faster on short sampled prompts, half the speed on whole-file edits (above); with the final command buffers 2% faster on short prompts and a third slower on edits |
 | `MLX_MAX_OPS_PER_BUFFER` 25 or 1,000 | 25 slower than the default; 1,000 slowed prompt reading by 8% |
 | `prep` reading the joined projections in place at 2+ rows, without MLX's copies | Inside the controls |
+| The router's top 8 picked inside the expert kernel, one launch fewer a visit | Same output, 4-10% slower: every threadgroup ranks before it reads |
+| A one-row cached-KV read without 8x8 matrix tiles | About 100 us a launch against 18-58: 20-25% slower decode |
+| The drafter at 4 bits, or at most 4 or 5 drafts | Inside the controls |
+| No draft the round after one that chose none | Inside the controls; it seldom took effect |
+| megakernel-zoo's Inkling 2 Mini engine for the M5 Max | Does not start on an M1: kernels of 576 threads a group, where the M1 allows 448 |
 
 The chunk, cache, checkpoint, concurrency and disk rows ran earlier the same
 day on the stock release with the 8-bit pack and full KV. What decided them,
@@ -370,50 +415,62 @@ release before tuning.
 
 ## Measurements
 
-The final setup (both patches, the converted uncensored pack, the flags and
-MLX variables above, built clean by `1-install.sh`, two panels and the gates on
-2026-11-25), against the stock release that started 2026-11-23, mlx-serve
+The final setup (both patches, the converted uncensored pack, the DFlash 2 drafter, the
+flags and MLX variables above, built clean by `1-install.sh`, three panels
+and the gates on 2026-11-26), against the stock release that started 2026-11-23, mlx-serve
 26.11.4-pre-release.1 with the 8-bit stock pack and the same window, cache
 and chunk:
 
 | Metric | Stock release | Final |
 |---|---|---|
-| Decode, greedy, short prompts | 43.8 tok/s | 55.8-56.2 tok/s |
-| Decode, sampled as OpenCode asks, short prompts | not measured | 55.7-56.0 tok/s |
-| Whole-file edits, greedy, 1-4K / behind 31K of context | not measured | 275-283 / 220 chars/s, all exact |
-| Thinking at `medium`, sampled | not measured | 57.0-59.1 tok/s |
-| Decode at 36K / 71K tokens | not measured | 45.8-46.0 / 39.3-39.4 tok/s |
+| Decode, greedy, short prompts | 43.8 tok/s | 57.3-58.2 tok/s |
+| Decode, sampled as OpenCode asks, short prompts | not measured | 56.3-57.5 tok/s |
+| Whole-file edits, greedy, 1-4K / behind 31K of context | not measured | 283-286 / 220 chars/s |
+| Thinking at `medium`, sampled | not measured | 59.2-62.6 tok/s |
+| Decode at 36K / 71K tokens | not measured | 45.7-46.6 / 40.0-41.5 tok/s |
 | Decode at 129K / 242K tokens | 22.1 / 16 tok/s | 27.9 (8-bit pack) / 21.7 tok/s, before namp's update; not measured since |
-| Two / four requests at once, together | 42.7 tok/s / not measured | 48.1-48.5 / 68.2-68.7 tok/s |
-| Prompt reading at 10K / 30K tokens | not measured / 362-371 tok/s | 421 / 380 tok/s |
-| Cold read, 128.7K / 241.7K tokens | 8.0 / 20.1 min | 7.8 / 19.6 min |
-| First token of a follow-up at 2.9K / 10K / 30K | 0.81 / 0.87 / 1.07 s | 0.45-0.46 / 0.50 / 0.61 s |
-| OpenCode-shaped follow-ups at 3K / 12K / 39K | 0.6 / 0.7 / 1.0-1.6 s | 0.48-0.49 / 0.53 / 0.65-1.43 s |
+| Two / four requests at once, together | 42.7 tok/s / not measured | 48.0-48.1 / 68.1-68.3 tok/s |
+| Prompt reading at 10K / 30K tokens | not measured / 362-371 tok/s | 421 / 377-380 tok/s |
+| Cold read, 128.7K / 241.7K tokens | 8.0 / 20.1 min | 7.7 / 19.4 min |
+| First token of a follow-up at 2.9K / 10K / 30K | 0.81 / 0.87 / 1.07 s | 0.45-0.46 / 0.49-0.50 / 0.61-0.63 s |
+| OpenCode-shaped follow-ups at 3K / 12K / 39K | 0.6 / 0.7 / 1.0-1.6 s | 0.48 / 0.53 / 0.65 s |
 | Reasoning split from the answer when streaming without tools | no (#1292) | yes |
 | Two long conversations (129K, 111K), follow-up on each | the first cached, the second read cold | both cached, first token in 1.0-1.2 s |
-| Follow-up at 242K tokens | cached, first token 3.3 s | cached, full answer in 7.8 s |
+| Follow-up at 242K tokens | cached, first token 3.3 s | cached, full answer in 7.8-22.8 s |
 | Graded follow-ups | 16 of 16 | 16 of 16 |
 | Three codes in a 129K / 242K-token prompt | 3 of 3 / 3 of 3 | 3 of 3 / 3 of 3 |
-| Start to ready, pack in the page cache | 2-4 s | 3.2 s |
-| Peak wired memory, panel | 37-39 GB | 29 GB |
+| Start to ready, pack in the page cache | 2-4 s | 3.2-4.3 s |
+| Peak wired memory, panel | 37-39 GB | 30 GB |
 
 The first token of a short prompt varied from 295 to 500 ms between runs of
-the same setup, so it is not compared. The second 39K OpenCode-shaped
-follow-up took 1.43 s because it read 245 new tokens, the earlier answer
-being longer.
+the same setup, so it is not compared. A follow-up's full answer at 242K takes as long as its reasoning runs, at
+about 20 tokens a second.
+
+One of the three greedy edits sometimes stops early, at about 3,600 of its
+7,100 tokens. It does so on this build and on the one before it, in about
+half their runs. The other two edits always came back exact.
 
 ### How close to the limit
 
 A plain decode step reads 3.26 GB: 1.84 GB of the 8 routed experts in each of
 48 layer visits, 1.04 GB of attention and gates over the same visits, and the
 0.38 GB head. The GPU reads 342 GB/s here, so one token a step cannot beat
-105 tok/s. Short decode runs at 56, 53% of that, up from 46% at the start of
-2026-11-25. A Metal System Trace with GPU counters puts the read bandwidth at
-peak during the expert kernels and at a mean of 48% over the step. Read from
-the code, a step is about 760 stages in a row, most of them small, at roughly
-10 us each. Fewer, fused stages are the next gain. A verify round has more to
-gain than a plain step: each added row costs 6.5-8 ms, where its new experts
-are at most about 1.6 GB, 5 ms.
+105 tok/s; with drafting off a step takes 17.2 ms, 58 tok/s, 55% of that.
+
+- **The experts** run near 280 GB/s, 82% of the limit. A Metal System Trace
+  with GPU counters shows read bandwidth at its peak during them and a mean of
+  48% over the step.
+- **The small kernels** between them cost about 3 us each to launch, measured
+  in a chain of 1,600: about 1-2 ms of a step. Removing two of them a visit
+  gained nothing (Tried and rejected).
+- **The rest** is medium projections that read below bandwidth: a 2,048-row
+  4-bit projection reads at 137 GB/s, the 6,552-row joined one at 246.
+- **Drafting** pays less here than on a dense model. Each row a verify adds
+  costs 6.5-8 ms, about what the experts it brings take to read at the expert
+  kernels' speed: rows route to different experts.
+- **Deep in a conversation** the one-row cache read is limited by arithmetic,
+  not bandwidth: at 36K tokens a step takes 4 ms more than the 1 ms its KV
+  bytes need.
 
 ## What mlx-serve's notes say about this model
 

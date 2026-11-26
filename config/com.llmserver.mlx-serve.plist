@@ -47,6 +47,10 @@
 		<string>1000000</string>
 		<key>MLX_MAX_OPS_PER_BUFFER</key>
 		<string>100</string>
+		<!-- namp's patch drafts with Inco's DFlash 2 model from here, not
+		     the pack's own draft head (docs/findings.md, "DFlash 2"). -->
+		<key>INKLING_DFLASH2_DIR</key>
+		<string>@LLM_DRAFT_DIR@</string>
 	</dict>
 	<key>RunAtLoad</key>
 	<true/>
