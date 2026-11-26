@@ -13,7 +13,7 @@ MLX_SERVE_GIT=https://github.com/ddalcu/mlx-serve.git
 MLX_SERVE_TAG=v26.11.4-pre-release.1
 MLX_SERVE_COMMIT=2fe9be834a601c70ef1a597563026340f0e722fe
 # patches/inkling2-m1.patch is namp/mlx-serve-inkling2-m1's change to src/,
-# `git diff 83865a4a c352f288 -- src`: its base commit carries the same src/
+# `git diff 83865a4a ab16dcb3 -- src`: its base commit carries the same src/
 # tree as this tag. patches/inkling2-m1-speed.patch is this repo's change on
 # top of it (docs/findings.md, "This repo's patch").
 
@@ -32,3 +32,8 @@ LLAMA_DYLIB_SHA256=01e5a4a3746bb25f1a817c1fa609448a3171f6cfb5f56a9122407d4c2c920
 # 1-install.sh downloads at this revision, with their sizes and checksums.
 LLM_SOURCE_REPO=OpenUncensored/Inkling-2-Mini-Uncensored
 LLM_SOURCE_REVISION=4e5f06d72b5a70c9dcd5e8046aea576eb3ee8487
+
+# Inco's DFlash 2 draft model for Inkling 2 Mini, which namp's patch drafts with
+# on M1 and M2. config/draft-source.sha256 lists its files with their checksums.
+LLM_DRAFT_REPO=incoai/Inkling-2-Mini-DFlash2
+LLM_DRAFT_REVISION=4f9088ea66c21f2b99ed657d1941c306b03e84d2

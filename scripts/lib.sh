@@ -55,6 +55,8 @@ MLX_SERVE_GEN_SETTINGS=$LLM_HOME/.mlx-serve/generation-settings.json
 LLM_SOURCE_DIR=$LLM_HOME/.mlx-serve/models/$LLM_SOURCE_REPO
 LLM_MODEL_ID=Inkling-2-Mini-Uncensored-q4attn
 LLM_MODEL_DIR=$LLM_HOME/.mlx-serve/models/local/$LLM_MODEL_ID
+# The DFlash 2 draft model, as released; the LaunchAgent names it to mlx-serve.
+LLM_DRAFT_DIR=$LLM_HOME/.mlx-serve/models/$LLM_DRAFT_REPO
 # What the pack was converted from and with. The LaunchAgent carries it, so a
 # reconverted pack restarts the server.
 LLM_MODEL_PIN=$LLM_SOURCE_REVISION-$MLX_SERVE_COMMIT
@@ -224,6 +226,7 @@ render() {
 	( umask 077
 	  sed -e "s|@LLM_BATTERY_SHUTDOWN_PCT@|$LLM_BATTERY_SHUTDOWN_PCT|g" \
 	      -e "s|@LLM_MODEL_DIR@|$LLM_MODEL_DIR|g" \
+	      -e "s|@LLM_DRAFT_DIR@|$LLM_DRAFT_DIR|g" \
 	      -e "s|@LLM_MODEL_PIN@|$LLM_MODEL_PIN|g" \
 	      -e "s|@LLM_PORT@|$LLM_PORT|g" \
 	      -e "s|@KEY_FILE@|$KEY_FILE|g" \

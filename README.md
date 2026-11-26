@@ -32,7 +32,7 @@ When you finish:
 |---|---|
 | Mac | Apple Silicon with 64 GB, macOS 26.2 or later, an administrator account |
 | Software | [Homebrew](https://brew.sh) in `/opt/homebrew`, Xcode 26.2 or later with its Metal toolchain, and a [Tailscale](https://tailscale.com) account |
-| Disk | About 42 GB: 20 GB for the release, 17.5 GB for the converted model, 4 GB for the build. Once converted, the release can be deleted, at the cost of downloading it again when an mlx-serve update reconverts |
+| Disk | About 43 GB: 20 GB for the release, 17.5 GB for the converted model, 1 GB for the draft model, 4 GB for the build. Once converted, the release can be deleted, at the cost of downloading it again when an mlx-serve update reconverts |
 | Time | About 10 minutes to build, plus the 20 GB download |
 
 **What runs.** Three pinned parts, each chosen by measurement on an M1 Max
@@ -54,6 +54,10 @@ When you finish:
   Thinking Machines' Inkling 2 Mini with refusals ablated: a looped mixture of
   experts with 26.4B parameters, 3.4B of them active per token, reading text
   and images. It is pinned by revision and checksum.
+- **The draft model:** Inco's [DFlash 2 drafter for Inkling 2
+  Mini](https://huggingface.co/incoai/Inkling-2-Mini-DFlash2), 1 GB, pinned the
+  same way. It proposes the tokens the model checks several at a time, which
+  keeps the output exact.
 - **The pack:** upstream's converter turns the release into an MLX pack,
   keeping the experts' released bytes and quantizing attention to 4 bits and
   the embedding and head to 6. It scores 0.019 KL divergence against the
@@ -61,7 +65,7 @@ When you finish:
 
 **Expect it to be private, not fast.** On the M1 Max it reads a new prompt at
 about 420 tokens a second up to 10K tokens, 380 at 30K, 275 at 129K and 200 at 242K,
-and writes 56 tokens a second, 46 at 36K tokens deep and 39 at 71K. An
+and writes 57 tokens a second, 46 at 36K tokens deep and 40 at 71K. An
 agent's first turn takes 20-50 s, and follow-ups start in under a second,
 because mlx-serve caches the conversation, two long ones at once. An M2
 takes the same patched paths, and an M3 or later upstream's own; neither is
