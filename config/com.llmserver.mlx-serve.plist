@@ -37,6 +37,17 @@
 		<string>--log-file</string>
 		<string>off</string>
 	</array>
+	<!-- MLX starts a new Metal command buffer past 50 MB of referenced
+	     buffers or 50 ops on an M1 Max. Every expert projection references a
+	     573 MB bank, so the GPU idled between buffers twice a layer visit.
+	     Measured: docs/findings.md, "Command buffers". -->
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>MLX_MAX_MB_PER_BUFFER</key>
+		<string>1000000</string>
+		<key>MLX_MAX_OPS_PER_BUFFER</key>
+		<string>100</string>
+	</dict>
 	<key>RunAtLoad</key>
 	<true/>
 	<key>KeepAlive</key>

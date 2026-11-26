@@ -1,0 +1,110 @@
+diff --git a/src/engines/mlx/spec/dspark.zig b/src/engines/mlx/spec/dspark.zig
+index d9aa2a0..d083964 100644
+--- a/src/engines/mlx/spec/dspark.zig
++++ b/src/engines/mlx/spec/dspark.zig
+@@ -152,7 +152,7 @@ fn recordNativePolicy(pol: anytype, n_tokens: u32, wall_ms: f32) void {
+ 
+ /// Checks `mtpLookupIndex` for a >= `min_suffix`-token trailing suffix match; fills `buf[0..1+n]` with
+ /// `[t1, copy_drafts...]` and returns `n` (0 = none). Uses 6 drafts normally (stays inside verifyQmm M<=7 on M1/M2),
+-/// or up to 15 drafts at short context (`<= 2048`) on a strong (>= 16-token) verbatim agreement.
++/// or up to 15 drafts on a strong (>= 16-token) verbatim agreement at any context: the fused verify read takes 16 rows.
+ fn nativeCopyProposal(self: *Generator, allocator: std.mem.Allocator, buf: *[16]u32, min_suffix: u32) !usize {
+     const remaining: u32 = self.max_tokens -| self.completion_tokens -| 1;
+     if (remaining < 2) return 0;
+@@ -160,7 +160,7 @@ fn nativeCopyProposal(self: *Generator, allocator: std.mem.Allocator, buf: *[16]
+     const max_q: u32 = @min(remaining, 15);
+     const found = idx.matchBest(self.next_token_id, max_q) orelse return 0;
+     if (found.suffix < min_suffix) return 0;
+-    const wide_ok = found.suffix >= @import("mtp_lookup.zig").STRONG_SUFFIX and self.ctx.cache.step <= 2048;
++    const wide_ok = found.suffix >= @import("mtp_lookup.zig").STRONG_SUFFIX;
+     const lim: usize = @min(found.draft.len, @as(usize, @intCast(@min(remaining, if (wide_ok) @as(u32, 15) else @as(u32, 6)))));
+     var n: usize = 0;
+     while (n < lim) : (n += 1) {
+diff --git a/src/plugins/inkling2/kernels.zig b/src/plugins/inkling2/kernels.zig
+index 18e7846..2701164 100644
+--- a/src/plugins/inkling2/kernels.zig
++++ b/src/plugins/inkling2/kernels.zig
+@@ -825,7 +825,7 @@ fn attend(c: *block.Ctx, L: *const Layer, w: *const Body, p: *const Prep, sinks:
+         const dt = ops.dtype(p.q);
+         o.k = try o.g.keep(p.k);
+         o.v = try o.g.keep(p.v);
+-        const can_qkv_ver = dv.has_quant_triple and s <= 8 and (dv.bits == 4 or dv.bits == 8) and dv.group_size > 0 and @rem(dv.group_size, 8) == 0 and (dt == .float16 or dt == .bfloat16) and @rem(hd, 32) == 0 and hd <= 256 and std.c.getenv("INKLING_NO_FUSED_QKV_VERIFY") == null;
++        const can_qkv_ver = dv.has_quant_triple and s <= 16 and (dv.bits == 4 or dv.bits == 8) and dv.group_size > 0 and @rem(dv.group_size, 8) == 0 and (dt == .float16 or dt == .bfloat16) and @rem(hd, 32) == 0 and hd <= 256 and std.c.getenv("INKLING_NO_FUSED_QKV_VERIFY") == null;
+         if (can_qkv_ver) {
+             const rows = ops.shape(dv.k_triple_q)[2];
+             const from = if (span > 0) @max(0, rows - @as(c_int, @intCast(span - 1))) else 0;
+diff --git a/src/plugins/inkling2/kernels/qkv_ink2_verify.metal b/src/plugins/inkling2/kernels/qkv_ink2_verify.metal
+index e1470e6..47fbaa2 100644
+--- a/src/plugins/inkling2/kernels/qkv_ink2_verify.metal
++++ b/src/plugins/inkling2/kernels/qkv_ink2_verify.metal
+@@ -1,5 +1,5 @@
+ #define UNR _Pragma("clang loop unroll(full)")
+-// Inkling 2 verify (S = 2..5 rows) directly over Q4/Q8 KV cache + S tiny FP16 candidate rows (k_new, v_new).
++// Inkling 2 verify (S = 2..16 rows) directly over Q4/Q8 KV cache + S tiny FP16 candidate rows (k_new, v_new).
+ // Zero KV dequantization, zero concat copy, reads Q4 KV ONCE for all S * GQA query rows simultaneously!
+ // q: [1, HQ, S, DK] (non-contiguous ok), kq/vq: [1, HKV, Tk_old, DK/VPW] u32,
+ // k_new/v_new: [1, HKV, S, DK] (T), rel: [1, S, HQ, R] (T).
+@@ -158,12 +158,13 @@ if (s0 < s1) {
+   }
+ }
+ 
+-// 2) Candidate keys k_new / v_new (SROWS <= 8): one tile on split == 0, sg == 0.
++// 2) Candidate keys k_new / v_new: tiles of 8 candidates on split == 0, sg == 0 (SROWS up to 16).
+ if (split == 0 && sg == 0) {
+   const device T* knh = k_new + (long)hkv * (long)k_new_strides[1];
+   const device T* vnh = v_new + (long)hkv * (long)v_new_strides[1];
+   const long kns = k_new_strides[2], vns = v_new_strides[2];
+-  const int ca = fn, cb = fn + 1;
++  for (int c0 = 0; c0 < SROWS; c0 += 8) {
++  const int ca = c0 + fn, cb = ca + 1;
+   const bool ca_in = ca < SROWS, cb_in = cb < SROWS;
+   const long rca = (long)min(ca, SROWS - 1), rcb = (long)min(cb, SROWS - 1);
+   simdgroup_float8x8 S[NHT];
+@@ -215,7 +216,7 @@ if (split == 0 && sg == 0) {
+     l[h] += ps;
+     P[h].thread_elements()[0] = p0; P[h].thread_elements()[1] = p1;
+   }
+-  const int rv = fm;
++  const int rv = c0 + fm;
+   const bool rv_ok = rv < SROWS;
+   const long rvc = (long)min(rv, SROWS - 1);
+   UNR for (int j = 0; j < NDV; ++j) {
+@@ -225,6 +226,7 @@ if (split == 0 && sg == 0) {
+     vt.thread_elements()[1] = rv_ok ? float(vnh[rvc * vns + e + 1]) : 0.0f;
+     UNR for (int h = 0; h < NHT; ++h) simdgroup_multiply_accumulate(O[h][j], P[h], vt, O[h][j]);
+   }
++  }
+ }
+ 
+ // 3) Combine 4 simdgroups in threadgroup
+diff --git a/src/plugins/inkling2/plugin.zig b/src/plugins/inkling2/plugin.zig
+index 87c6def..e880cd0 100644
+--- a/src/plugins/inkling2/plugin.zig
++++ b/src/plugins/inkling2/plugin.zig
+@@ -442,7 +442,7 @@ fn openRound(m: *Loaded, f: *const abi.Forward, stochastic: bool) !Opened {
+ 
+     o.started = nowUs();
+     if (o.drafts == 0) {
+-        const v = run_mod.tableForward(Model, &m.base, &.{ .mode = .decode, .logits = .last_row, .rows = 1, .tokens = f.tokens, .slots = f.slots, .positions = f.positions, .caches = f.caches, .cache_ops = f.cache_ops }, &o.fo);
++        const v = run_mod.tableForward(Model, &m.base, &.{ .mode = .decode, .logits = .last_row, .rows = 1, .tokens = f.tokens, .slots = f.slots, .positions = f.positions, .caches = f.caches, .cache_ops = f.cache_ops, .pipeline_every = round_pipeline }, &o.fo);
+         if (!v.isOk()) return error.Inkling2DraftRound;
+         return o;
+     }
+@@ -450,11 +450,16 @@ fn openRound(m: *Loaded, f: *const abi.Forward, stochastic: bool) !Opened {
+     @memset(o.opens, .{ .g = g });
+     sp.?.opens = o.opens;
+     defer sp.?.opens = null;
+-    const v = run_mod.tableForward(Model, &m.base, &.{ .mode = .verify, .logits = .all_rows, .rows = 1 + o.drafts, .tokens = .{}, .ids = .{ .ctx = (try g.concat(&.{ first, proposed }, 0)).ctx }, .slots = f.slots, .positions = f.positions, .caches = f.caches, .cache_ops = f.cache_ops }, &o.fo);
++    const v = run_mod.tableForward(Model, &m.base, &.{ .mode = .verify, .logits = .all_rows, .rows = 1 + o.drafts, .tokens = .{}, .ids = .{ .ctx = (try g.concat(&.{ first, proposed }, 0)).ctx }, .slots = f.slots, .positions = f.positions, .caches = f.caches, .cache_ops = f.cache_ops, .pipeline_every = round_pipeline }, &o.fo);
+     if (!v.isOk()) return error.Inkling2DraftRound;
+     return o;
+ }
+ 
++/// Layer visits between hand-offs of a round's residual to the GPU while the rest of its graph is built
++/// (`Forward.pipeline_every`): a round syncs on its picks, so an unpipelined forward leaves the GPU idle while its
++/// whole graph is built. 4, the engine's own verify cadence (dflash_tree.zig); 2 and 8 measured the same on an M1 Max.
++const round_pipeline: u32 = 4;
++
+ /// Expected-tokens-per-ms optimal draft count k in 0..sure.len: maximizes expected ms saved relative to serial
+ /// plain steps using measured RowCost timings, avoiding unprofitable v1 rounds and capturing high-confidence k=3..7 runs.
+ fn chooseDrafts(rc: *const RowCost, sure: []const f32, tokens: []const i32, stops: []const u32, stochastic: bool, gumbel: bool) u32 {
