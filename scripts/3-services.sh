@@ -45,13 +45,18 @@ key | grep -Eqx '[A-Za-z0-9]{32,}' \
 	|| die "$KEY_FILE does not hold a key of 32+ letters and digits. Delete it and re-run to make a new one."
 
 step "Generation defaults"
-# Inkling's chat template thinks at "high" when a request names no reasoning
-# effort, and clients such as OpenCode name none. This rule fills in "medium"
-# only where the request leaves the field out (docs/findings.md). mlx-serve
-# reads the file at each request, so a change needs no restart.
-mkdir -p "$(dirname "$MLX_SERVE_GEN_SETTINGS")"
-render generation-settings.json "$MLX_SERVE_GEN_SETTINGS" 600 "$LLM_USER:staff"
-ok "reasoning effort medium unless a request names one ($MLX_SERVE_GEN_SETTINGS)"
+# A request that names no reasoning effort gets the chat template's default,
+# high, as Thinking Machines ship it. An earlier version of this repo installed
+# a rule giving "medium"; remove it. mlx-serve reads the file at each request,
+# so this needs no restart.
+if [ "$(cat "$MLX_SERVE_GEN_SETTINGS" 2>/dev/null)" = '{"reasoning_effort": {"value": "medium"}}' ]; then
+	rm -f "$MLX_SERVE_GEN_SETTINGS"
+fi
+if [ -e "$MLX_SERVE_GEN_SETTINGS" ]; then
+	warn "$MLX_SERVE_GEN_SETTINGS holds rules this repo did not write; left in place"
+else
+	ok "reasoning effort high unless a request names one (the template's default)"
+fi
 
 step "Server"
 mkdir -p "$(dirname "$MLX_SERVE_PLIST")" "$(dirname "$MLX_SERVE_LOG")"

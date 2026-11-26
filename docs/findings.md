@@ -313,9 +313,8 @@ variables ([Command buffers](#command-buffers)) and one generation rule
   ([Context depth](#context-depth)).
 - `--log-file off`. launchd already writes mlx-serve's output to
   `~/Library/Logs/llm-server/mlx-serve.log`.
-- `~/.mlx-serve/generation-settings.json` holds
-  `{"reasoning_effort": {"value": "medium"}}`
-  ([Reasoning effort](#reasoning-effort)).
+- No generation rules: a request that names no effort thinks at the
+  template's `high` ([Reasoning effort](#reasoning-effort)).
 
 By default mlx-serve keeps the model loaded however long it idles, keeps
 shared prefixes in a RAM cache and writes none to disk, queues requests and
@@ -408,10 +407,14 @@ changes *(sourced: `docs/reference.md`, "Generation defaults")*. It refuses
 the whole file over one bad field or value *(source:
 `src/host/api/generation_settings.zig`)*.
 
-`3-services.sh` installs `{"reasoning_effort": {"value": "medium"}}`, without
-`ignore_client`, so a client that asks for `high` still gets it. On five
-prompts, a full answer took 68 s at `medium` and 106 s at `high`, on the stock
-release before tuning.
+This repo sets no such rule, so a request that names no effort thinks at
+`high`, the default Thinking Machines ship. An earlier version installed
+`{"reasoning_effort": {"value": "medium"}}` to save time: on five prompts, a
+full answer took 68 s at `medium` and 106 s at `high`, on the stock release
+before tuning. It was dropped to keep the model as its authors run it.
+Reasoning longer is also more accurate here: the `verify.sh` edit below came
+back exact 18 of 20 times at `medium` against 22 of 32 at `none`.
+`3-services.sh` removes the old rule.
 
 ## Measurements
 
@@ -463,8 +466,7 @@ Every miss was the same backslash, and the spread between setups is within
 that between two runs of this one. Neither the drafter, the 4-bit attention
 nor the uncensored weights cause it. It comes with shorter reasoning: tries
 that reasoned past 3,000 characters were exact 11 of 13 times, shorter ones
-43 of 67. At effort `medium`, which `config/generation-settings.json` gives
-clients, this setup was exact 18 of 20 times. Greedy runs split the same way,
+43 of 67. At effort `medium` this setup was exact 18 of 20 times. Greedy runs split the same way,
 because the GPU's sums are not bit-identical from run to run and the first
 few tokens of reasoning decide which way it goes.
 
@@ -511,7 +513,6 @@ From the notes of the plugin that serves Inkling 2,
   own paths run, and mlx-serve loads the pack's draft head by itself.
 - Coding quality, and what the ablation changes beyond refusals. The guide
   defers to published results.
-- How much time `medium` saves over `high` on a real session.
 
 ## References
 

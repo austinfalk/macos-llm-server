@@ -260,7 +260,6 @@ needs.
 | Stop | `launchctl bootout gui/$(id -u)/com.llmserver.mlx-serve`. It starts again at your next login or `3-services.sh` |
 | Log | `~/Library/Logs/llm-server/mlx-serve.log`. Nothing rotates it |
 | LaunchAgent | `~/Library/LaunchAgents/com.llmserver.mlx-serve.plist`, from `config/com.llmserver.mlx-serve.plist`. Change it by re-running `3-services.sh` |
-| Generation defaults | `~/.mlx-serve/generation-settings.json`, from `config/generation-settings.json`. `3-services.sh` replaces it |
 | API key | `~/.config/llm-server/api-key` |
 | mlx-serve | `~/.mlx-serve/builds/<build>`, one folder per tag and patch, beside the source in `~/.mlx-serve/builds/src`, the converter's Python in `~/.mlx-serve/builds/venv`, and `build.log` |
 | Model | `~/.mlx-serve/models/local/Inkling-2-Mini-Uncensored-q4attn`, converted from `~/.mlx-serve/models/OpenUncensored/Inkling-2-Mini-Uncensored` |
@@ -348,11 +347,10 @@ It also sets two MLX variables, `MLX_MAX_MB_PER_BUFFER=1000000` and
 every expert projection, and the GPU waits between buffers; larger buffers
 make decode about 13% faster ([findings](docs/findings.md#command-buffers)).
 
-One more setting lives outside the LaunchAgent.
-`~/.mlx-serve/generation-settings.json` gives a request that names no
-reasoning effort `medium`. Inkling's chat template would think at `high`, and
-clients such as OpenCode name no effort. A request that names an effort keeps
-it ([findings](docs/findings.md#reasoning-effort)).
+A request that names no reasoning effort thinks at `high`, the default
+Thinking Machines ship in Inkling's chat template. Clients such as OpenCode
+name none. A request that names an effort keeps it
+([findings](docs/findings.md#reasoning-effort)).
 
 mlx-serve checks the key, as `Authorization: Bearer` or `x-api-key`, on every
 route except `/health` (which says only `{"status":"ok"}`) and CORS preflight.
