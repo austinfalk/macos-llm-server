@@ -7,14 +7,15 @@
 # --- mlx-serve ----------------------------------------------------------------
 # Built from upstream's source at this tag, the way upstream's release workflow
 # builds it (.github/workflows/release.yml), with patches/inkling2-m1.patch
-# applied to src/. The commit is checked after the fetch, so a moved tag fails
+# and then patches/inkling2-m1-speed.patch applied to src/. The commit is checked after the fetch, so a moved tag fails
 # the install instead of building something else.
 MLX_SERVE_GIT=https://github.com/ddalcu/mlx-serve.git
 MLX_SERVE_TAG=v26.11.4-pre-release.1
 MLX_SERVE_COMMIT=2fe9be834a601c70ef1a597563026340f0e722fe
 # patches/inkling2-m1.patch is namp/mlx-serve-inkling2-m1's change to src/,
 # `git diff 83865a4a c352f288 -- src`: its base commit carries the same src/
-# tree as this tag.
+# tree as this tag. patches/inkling2-m1-speed.patch is this repo's change on
+# top of it (docs/findings.md, "This repo's patch").
 
 # Zig, which upstream's scripts/fetch-zig.sh downloads without a checksum.
 # 1-install.sh downloads and checks it first, so fetch-zig.sh finds it staged.

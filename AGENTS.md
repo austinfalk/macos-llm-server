@@ -23,8 +23,10 @@ scripts do not run there.
   Zig, libllama, and the model's repository and revision.
   `config/model-source.sha256` lists the model's files with their checksums,
   and `config/convert-requirements.txt` the converter's Python packages.
-- `patches/inkling2-m1.patch` is the M1/M2 patch, applied to upstream's
-  `src/` at build time. `check-patch.sh` checks that it still applies.
+- `patches/inkling2-m1.patch` is namp's M1/M2 patch, and
+  `patches/inkling2-m1-speed.patch` this repo's changes on top of it. Both are
+  applied to upstream's `src/` at build time, in that order. `check-patch.sh`
+  checks that they still apply.
 - `config/` holds the tailnet policy and the templates that the setup steps
   install. `render()` in `lib.sh` fills their `@PLACEHOLDERS@`. `config.env`
   is untracked and overrides the defaults in `lib.sh`.
@@ -34,13 +36,15 @@ scripts do not run there.
 ## How the server is meant to run
 
 Run upstream mlx-serve at the pinned tag, built the way its release workflow
-builds it, with only `patches/inkling2-m1.patch` on top. Convert the model
+builds it, with only the two patches in `patches/` on top. Convert the model
 with upstream's own converter. This repo adds only what upstream lacks or
 what a measurement justifies:
 
 - the patch, from [namp/mlx-serve-inkling2-m1](https://github.com/namp/mlx-serve-inkling2-m1),
   kept as a diff against upstream so it can be dropped once upstream ships
   the same speed on an M1, or carried by this repo if the fork goes quiet
+- the speed patch, this repo's own changes to namp's code, each measured in
+  `docs/findings.md`, dropped part by part as the fork ships the same
 - a LaunchAgent, because the command-line build ships no service manager
 - the hardening step: pf, sshd and a battery watchdog
 - the flags in `config/com.llmserver.mlx-serve.plist` and the rule in

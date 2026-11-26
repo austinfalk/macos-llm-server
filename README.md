@@ -39,12 +39,16 @@ When you finish:
 ([findings](docs/findings.md)):
 
 - **mlx-serve** at upstream's tag **26.11.4-pre-release.1**, built from source
-  the way upstream builds its releases, with one patch:
+  the way upstream builds its releases, with two patches.
   [`patches/inkling2-m1.patch`](patches/inkling2-m1.patch), from
-  [namp/mlx-serve-inkling2-m1](https://github.com/namp/mlx-serve-inkling2-m1).
-  It adds FP16 and fused 4-bit-KV attention for M1 and M2 GPUs, and fixes
-  where streamed reasoning goes. The repo carries it as a diff against
+  [namp/mlx-serve-inkling2-m1](https://github.com/namp/mlx-serve-inkling2-m1),
+  adds FP16, fused 4-bit-KV attention and drafting for M1 and M2 GPUs, and
+  fixes where streamed reasoning goes. The repo carries it as a diff against
   upstream, so it can be dropped once upstream ships the same.
+  [`patches/inkling2-m1-speed.patch`](patches/inkling2-m1-speed.patch), this
+  repo's own, goes on top: it hands each draft round to the GPU while the rest
+  of it is built, and lets a span copied from the prompt verify 16 rows at any
+  context, which needed a fix to the fused attention past 8 rows.
 - **The model:** [OpenUncensored's Inkling 2 Mini
   Uncensored](https://huggingface.co/OpenUncensored/Inkling-2-Mini-Uncensored),
   Thinking Machines' Inkling 2 Mini with refusals ablated: a looped mixture of
@@ -57,7 +61,7 @@ When you finish:
 
 **Expect it to be private, not fast.** On the M1 Max it reads a new prompt at
 about 420 tokens a second up to 10K tokens, 380 at 30K, 275 at 129K and 200 at 242K,
-and writes 48 tokens a second, 41 at 36K tokens deep and 28 at 129K. An
+and writes 56 tokens a second, 46 at 36K tokens deep and 39 at 71K. An
 agent's first turn takes 20-50 s, and follow-ups start in under a second,
 because mlx-serve caches the conversation, two long ones at once. An M2
 takes the same patched paths, and an M3 or later upstream's own; neither is
@@ -278,8 +282,8 @@ passes. Then:
    [ziglang.org](https://ziglang.org/download/), and expect
    `1-install.sh` to stop at the new libllama's checksum: check the release
    it came from, then set `LLAMA_DYLIB_SHA256` to the checksum it prints.
-2. Run `sh scripts/check-patch.sh`. If the patch no longer applies, rebase
-   it on the new tag. Drop each part upstream now ships: compare upstream's
+2. Run `sh scripts/check-patch.sh`. If a patch no longer applies, rebase
+   it on the new tag, namp's first. Drop each part upstream now ships: compare upstream's
    M1 decode and follow-up numbers with the patched build's, and if
    upstream matches, delete the patch.
 3. Run `sh scripts/1-install.sh`, which builds beside the running version,
@@ -334,6 +338,11 @@ everything else at mlx-serve's defaults
 - `--kv-quant 4`, which makes decode faster from 8K tokens up, by 22% at
   129K.
 - `--log-file off`. launchd writes mlx-serve's output to the log already.
+
+It also sets two MLX variables, `MLX_MAX_MB_PER_BUFFER=1000000` and
+`MLX_MAX_OPS_PER_BUFFER=100`. MLX's defaults close a GPU command buffer after
+every expert projection, and the GPU waits between buffers; larger buffers
+make decode about 13% faster ([findings](docs/findings.md#command-buffers)).
 
 One more setting lives outside the LaunchAgent.
 `~/.mlx-serve/generation-settings.json` gives a request that names no

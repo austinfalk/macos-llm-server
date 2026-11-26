@@ -57,7 +57,7 @@ step "mlx-serve"
 if [ "$(mlx_serve_version)" = "$MLX_SERVE_BUILD" ]; then
 	ok "mlx-serve $MLX_SERVE_BUILD ($MLX_SERVE_BIN)"
 else
-	info "building $MLX_SERVE_TAG with patches/inkling2-m1.patch: about 10 minutes the first time"
+	info "building $MLX_SERVE_TAG with patches/inkling2-m1.patch and inkling2-m1-speed.patch: about 10 minutes the first time"
 	S=$MLX_SERVE_SRC
 	if [ ! -d "$S/.git" ]; then
 		git -c advice.detachedHead=false clone -q --depth 1 --branch "$MLX_SERVE_TAG" "$MLX_SERVE_GIT" "$S" || die "could not clone $MLX_SERVE_GIT"
@@ -93,6 +93,7 @@ else
 	got=$(shasum -a 256 "$S/lib/llama/lib/libllama.dylib" | awk '{print $1}')
 	[ "$got" = "$LLAMA_DYLIB_SHA256" ] || die "the staged libllama.dylib has SHA-256 $got, not the pinned $LLAMA_DYLIB_SHA256"
 	git -C "$S" apply "$PATCH" || die "patches/inkling2-m1.patch does not apply to $MLX_SERVE_TAG"
+	git -C "$S" apply "$SPEED_PATCH" || die "patches/inkling2-m1-speed.patch does not apply on top of patches/inkling2-m1.patch"
 	( cd "$S" && PATH="$S/.zig-toolchain:$PATH" zig build -Doptimize=ReleaseFast -Dstrip \
 		-Dversion="$MLX_SERVE_BUILD" -Dgit-sha="$MLX_SERVE_COMMIT" ) >>"$MLX_SERVE_HOME/build.log" 2>&1 \
 		|| die "building mlx-serve failed: see $MLX_SERVE_HOME/build.log"

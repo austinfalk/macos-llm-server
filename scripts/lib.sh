@@ -35,12 +35,14 @@ KEY_FILE=$LLM_HOME/.config/llm-server/api-key
 . "$LLM_REPO/scripts/pins.sh"
 
 # mlx-serve, built by 1-install.sh. Each build gets its own folder, named for
-# the tag and the patch, so a new pin or patch builds beside the running one,
-# and the LaunchAgent changes to the new folder.
+# the tag and the patches, so a new pin or patch builds beside the running one,
+# and the LaunchAgent changes to the new folder. namp's M1/M2 patch applies
+# first, then this repo's changes on top of it.
 PATCH=$LLM_REPO/patches/inkling2-m1.patch
+SPEED_PATCH=$LLM_REPO/patches/inkling2-m1-speed.patch
 MLX_SERVE_HOME=$LLM_HOME/.mlx-serve/builds
 MLX_SERVE_SRC=$MLX_SERVE_HOME/src
-MLX_SERVE_BUILD=${MLX_SERVE_TAG#v}-inkling2-m1-$(shasum -a 256 "$PATCH" 2>/dev/null | cut -c1-8)
+MLX_SERVE_BUILD=${MLX_SERVE_TAG#v}-inkling2-m1-$(cat "$PATCH" "$SPEED_PATCH" 2>/dev/null | shasum -a 256 | cut -c1-8)
 MLX_SERVE_BIN=$MLX_SERVE_HOME/$MLX_SERVE_BUILD/mlx-serve
 MLX_SERVE_LABEL=com.llmserver.mlx-serve
 MLX_SERVE_PLIST=$LLM_HOME/Library/LaunchAgents/$MLX_SERVE_LABEL.plist
