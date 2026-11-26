@@ -58,7 +58,6 @@ cat <<LEFT
 == Left in place, on purpose
   models           $LLM_HOME/.mlx-serve/models   (the release and the converted pack)
   mlx-serve        $MLX_SERVE_HOME   (builds, source, the converter's Python)
-  settings         $MLX_SERVE_GEN_SETTINGS
   API key          $KEY_FILE
   logs             $MLX_SERVE_LOG, $LLM_LOGS
   packages         sudo $TAILSCALED uninstall-system-daemon, then brew uninstall tailscale cmake webp python@3.12

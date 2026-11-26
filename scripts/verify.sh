@@ -70,10 +70,10 @@ else
 	expect "mlx-serve runs as" "$(ps -o user= -p "$pid")" "$LLM_USER"
 fi
 expect "key file permissions" "$(stat -f %Sp:%Su "$KEY_FILE" 2>/dev/null)" "-rw-------:$LLM_USER"
-if cmp -s "$LLM_REPO/config/generation-settings.json" "$MLX_SERVE_GEN_SETTINGS"; then
-	pass "reasoning effort medium unless a request names one ($MLX_SERVE_GEN_SETTINGS)"
+if [ -e "$MLX_SERVE_GEN_SETTINGS" ]; then
+	fail "$MLX_SERVE_GEN_SETTINGS exists, so requests that name no effort may not get the template's high (re-run scripts/3-services.sh)"
 else
-	fail "$MLX_SERVE_GEN_SETTINGS is not this repo's, so requests that name no effort think at high (re-run scripts/3-services.sh)"
+	pass "reasoning effort high unless a request names one (the template's default)"
 fi
 
 step "Nothing listens beyond loopback"

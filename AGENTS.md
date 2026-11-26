@@ -61,9 +61,8 @@ what a measurement justifies:
   `docs/findings.md`, dropped part by part as the fork ships the same
 - a LaunchAgent, because the command-line build ships no service manager
 - the hardening step: pf, sshd and a battery watchdog
-- the flags in `config/com.llmserver.mlx-serve.plist` and the rule in
-  `config/generation-settings.json`, each with its reason in
-  `docs/findings.md`
+- the flags in `config/com.llmserver.mlx-serve.plist`, each with its reason
+  in `docs/findings.md`
 
 To change a setting, use upstream's published numbers when they cover this
 Mac. When they do not, measure here: one change at a time, the current setup

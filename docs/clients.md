@@ -57,11 +57,11 @@ the prompt again, from the start when the change is more than about 2,000
 tokens back ([findings](findings.md#what-mlx-serves-notes-say-about-this-model)).
 So keep sessions going and turn off MCP servers a session does not need. Requests share the GPU, so run one agent at a time.
 
-**Reasoning effort.** The server gives `medium` to requests that name no
-effort, so OpenCode needs no setting. Without that rule, Inkling's template
-thinks at `high` ([findings](findings.md#reasoning-effort)). For `high` on one
-OpenCode task, press **Ctrl+T** in the TUI, or run
-`opencode run --model tailnet/Inkling-2-Mini-Uncensored-q4attn#high`.
+**Reasoning effort.** A request that names no effort thinks at `high`,
+Inkling's default ([findings](findings.md#reasoning-effort)), so OpenCode
+needs no setting. For a quicker answer on one OpenCode task, press
+**Ctrl+T** in the TUI, or run
+`opencode run --model tailnet/Inkling-2-Mini-Uncensored-q4attn#medium`.
 
 ## 1. Tailscale
 
@@ -201,7 +201,7 @@ Why:
   `summary` and `compaction` agents use by default, so each is pinned. Build
   and plan use the top-level `model`, and subagents use their session's model.
 - `capabilities.reasoning` gives the low, medium and high variants. With none
-  chosen, the server's `medium` applies.
+  chosen, Inkling's default `high` applies.
 - `chunkTimeout`: by default OpenCode gives up on a stream after 15 minutes
   without a chunk. A cold prompt near the limit takes longer than that to
   read: about 20 minutes on the M1 Max. mlx-serve
