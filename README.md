@@ -49,11 +49,12 @@ When you finish:
   repo's own, goes on top: it hands each draft round to the GPU while the rest
   of it is built, and lets a span copied from the prompt verify 16 rows at any
   context, which needed a fix to the fused attention past 8 rows.
-- **The model:** [OpenUncensored's Inkling 2 Mini
-  Uncensored](https://huggingface.co/OpenUncensored/Inkling-2-Mini-Uncensored),
-  Thinking Machines' Inkling 2 Mini with refusals ablated: a looped mixture of
-  experts with 26.4B parameters, 3.4B of them active per token, reading text
-  and images. It is pinned by revision and checksum.
+- **The model:** Thinking Machines'
+  [Inkling 2 Mini](https://huggingface.co/thinkingmachines/Inkling-2-Mini), a
+  looped mixture of experts with 26.4B parameters, 3.4B of them active per
+  token, reading text and images, with refusals removed by AtomicChat's
+  [uncensoring adapter](https://huggingface.co/AtomicChat/Inkling-2-Mini-Uncensored-GGUF).
+  Both are pinned by revision and checksum.
 - **The draft model:** Inco's [DFlash 2 drafter for Inkling 2
   Mini](https://huggingface.co/incoai/Inkling-2-Mini-DFlash2), 1 GB, pinned the
   same way. It proposes the tokens the model checks several at a time, which
@@ -138,12 +139,16 @@ As your normal user, not sudo. It:
    Zig after checking its checksum, runs upstream's MLX and libllama scripts
    and checks the library they stage, applies the patch, builds, and lays the
    result out in `~/.mlx-serve/builds/<build>` as upstream's release does;
-4. downloads the model's files at the pinned revision into
-   `~/.mlx-serve/models/OpenUncensored/Inkling-2-Mini-Uncensored`, eight
-   ranges at a time, and checks each one's checksum;
-5. converts it with upstream's converter, in a Python environment whose
-   packages are pinned by hash, into
-   `~/.mlx-serve/models/local/Inkling-2-Mini-Uncensored-q4attn`.
+4. downloads the release's files at the pinned revision into
+   `~/.mlx-serve/models/thinkingmachines/Inkling-2-Mini`, eight ranges at a
+   time, and AtomicChat's adapter into
+   `~/.mlx-serve/models/AtomicChat/Inkling-2-Mini-Uncensored-GGUF`, and checks
+   each file's checksum;
+5. converts the release with upstream's converter, in a Python environment
+   whose packages are pinned by hash, and merges the adapter into the
+   weights with `scripts/merge-uncensoring.py`, into
+   `~/.mlx-serve/models/local/Inkling-2-Mini-Uncensored-8bit`. It checks the
+   result against `config/model-pack.sha256`.
 
 It keeps `~/.mlx-serve` out of Time Machine. If the Tailscale app is
 installed, the script warns you. This setup runs Homebrew's `tailscaled`
@@ -182,7 +187,7 @@ It prints what clients need:
 
 - Endpoint: `https://<machine>.<tailnet>.ts.net/v1`, with `:PORT` after the
   name if you set `LLM_HTTPS_PORT`
-- Model: `Inkling-2-Mini-Uncensored-q4attn`
+- Model: `Inkling-2-Mini-Uncensored-8bit`
 - Key: the one line of `~/.config/llm-server/api-key`
 
 Save the key in your password manager now, so client devices can copy it
@@ -262,7 +267,7 @@ needs.
 | LaunchAgent | `~/Library/LaunchAgents/com.llmserver.mlx-serve.plist`, from `config/com.llmserver.mlx-serve.plist`. Change it by re-running `3-services.sh` |
 | API key | `~/.config/llm-server/api-key` |
 | mlx-serve | `~/.mlx-serve/builds/<build>`, one folder per tag and patch, beside the source in `~/.mlx-serve/builds/src`, the converter's Python in `~/.mlx-serve/builds/venv`, and `build.log` |
-| Model | `~/.mlx-serve/models/local/Inkling-2-Mini-Uncensored-q4attn`, converted from `~/.mlx-serve/models/OpenUncensored/Inkling-2-Mini-Uncensored` |
+| Model | `~/.mlx-serve/models/local/Inkling-2-Mini-Uncensored-8bit`, converted from `~/.mlx-serve/models/thinkingmachines/Inkling-2-Mini` with `~/.mlx-serve/models/AtomicChat/Inkling-2-Mini-Uncensored-GGUF` merged in |
 | Console | The endpoint without `/v1`, such as `https://<machine>.<tailnet>.ts.net/`. It asks for the key |
 
 **After a restart**, log in over Screen Sharing. The server starts with your
@@ -322,7 +327,7 @@ where macOS gives it the GPU. The LaunchAgent passes these flags and leaves
 everything else at mlx-serve's defaults
 ([findings](docs/findings.md#settings)):
 
-- `--model ~/.mlx-serve/models/local/Inkling-2-Mini-Uncensored-q4attn`.
+- `--model ~/.mlx-serve/models/local/Inkling-2-Mini-Uncensored-8bit`.
   mlx-serve names the model after the folder.
 - `--host 127.0.0.1`, because mlx-serve listens on every interface by default.
   `tailscale serve` is the only way in.
@@ -335,11 +340,13 @@ everything else at mlx-serve's defaults
   without the key, and `tailscale serve` connects from loopback, so without
   this flag the whole tailnet would get in without the key.
 - `--ctx-size 262144`, a fixed window, so clients can configure it.
-- `--prefix-cache-mem 24GB`, so long conversations stay cached.
+- `--prefix-cache-mem 16GB`, so long conversations stay cached, with room
+  left for a cold 242K prompt.
 - `--prefill-chunk 4096`, which reads as fast as larger chunks and keeps
   follow-ups at 242K tokens cached.
-- `--kv-quant 4`, which makes decode faster from 8K tokens up, by 22% at
-  129K.
+- `--kv-quant 8`, which keeps the KV cache 8-bit: 4-bit is up to 9% faster
+  deep in a conversation but the largest single step away from the release's
+  output.
 - `--log-file off`. launchd writes mlx-serve's output to the log already.
 
 It also sets two MLX variables, `MLX_MAX_MB_PER_BUFFER=1000000` and

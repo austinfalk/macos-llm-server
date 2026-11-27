@@ -29,11 +29,11 @@
 		<string>--ctx-size</string>
 		<string>262144</string>
 		<string>--prefix-cache-mem</string>
-		<string>24GB</string>
+		<string>16GB</string>
 		<string>--prefill-chunk</string>
 		<string>4096</string>
 		<string>--kv-quant</string>
-		<string>4</string>
+		<string>8</string>
 		<string>--log-file</string>
 		<string>off</string>
 	</array>

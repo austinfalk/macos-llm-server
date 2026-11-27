@@ -232,10 +232,33 @@ else
 	ok "$LLM_DRAFT_REPO downloaded and checked"
 fi
 
+step "Uncensoring adapter"
+# AtomicChat's rank-1 LoRA, read for its directions only: one 44 MB file.
+base=https://huggingface.co/$LLM_ADAPTER_REPO/resolve/$LLM_ADAPTER_REVISION
+mkdir -p "$LLM_ADAPTER_DIR"
+astamp=$LLM_ADAPTER_DIR/.verified-$LLM_ADAPTER_REVISION
+if [ -f "$converted" ]; then
+	ok "not needed: the model is converted"
+elif [ -f "$astamp" ]; then
+	ok "$LLM_ADAPTER_REPO at ${LLM_ADAPTER_REVISION%"${LLM_ADAPTER_REVISION#????????}"}, checked before"
+else
+	grep -v '^#' "$LLM_REPO/config/adapter-source.sha256" | while read -r sum size f; do
+		dest=$LLM_ADAPTER_DIR/$f
+		if [ "$(size_of "$dest")" != "$size" ]; then
+			{ fetch "$f" > "$dest.part" && mv "$dest.part" "$dest"; } || die "could not download $f of $LLM_ADAPTER_REPO. Run this script again"
+		fi
+		got=$(shasum -a 256 "$dest" | awk '{print $1}')
+		[ "$got" = "$sum" ] || { rm -f "$dest"; die "$f of $LLM_ADAPTER_REPO has SHA-256 $got, not the pinned $sum. Deleted it: run this script again"; }
+	done
+	touch "$astamp"
+	ok "$LLM_ADAPTER_REPO downloaded and checked"
+fi
+
 step "Model conversion"
 # mlx-serve reads MLX packs. Upstream's own converter writes one from the
-# release: the routed experts keep the release's bytes; the attention goes
-# 4-bit, the embedding and head 6-bit (docs/findings.md, "The pack").
+# release: the routed experts keep the release's bytes, the rest goes 8-bit.
+# scripts/merge-uncensoring.py then applies AtomicChat's adapter to it
+# (docs/findings.md, "The pack").
 if [ -f "$converted" ]; then
 	ok "$LLM_MODEL_ID ($LLM_MODEL_DIR)"
 else
@@ -246,10 +269,14 @@ else
 	"$venv/bin/pip" install -q --disable-pip-version-check --require-hashes -r "$LLM_REPO/config/convert-requirements.txt" \
 		|| die "could not install the converter's dependencies"
 	tmpdir=$LLM_MODEL_DIR.converting
-	rm -rf "$tmpdir"
-	"$venv/bin/python" -I "$MLX_SERVE_SRC/tests/convert_inkling2.py" --src "$LLM_SOURCE_DIR" --dst "$tmpdir" \
-		--bits 4 --embed-bits 6 --head-bits 6 >"$MLX_SERVE_HOME/convert.log" 2>&1 \
+	rm -rf "$tmpdir" "$tmpdir.8bit"
+	"$venv/bin/python" -I "$MLX_SERVE_SRC/tests/convert_inkling2.py" --src "$LLM_SOURCE_DIR" --dst "$tmpdir.8bit" \
+		>"$MLX_SERVE_HOME/convert.log" 2>&1 \
 		|| die "the conversion failed: see $MLX_SERVE_HOME/convert.log"
+	"$venv/bin/python" -I "$LLM_REPO/scripts/merge-uncensoring.py" "$tmpdir.8bit" "$tmpdir" "$LLM_SOURCE_DIR" \
+		"$LLM_ADAPTER_DIR/Inkling-2-Mini-Uncensored-LoRA.gguf" >>"$MLX_SERVE_HOME/convert.log" 2>&1 \
+		|| die "the merge failed: see $MLX_SERVE_HOME/convert.log"
+	rm -rf "$tmpdir.8bit"
 	grep -v '^#' "$LLM_REPO/config/model-pack.sha256" | while read -r sum f; do
 		got=$(shasum -a 256 "$tmpdir/$f" | awk '{print $1}')
 		[ "$got" = "$sum" ] || die "the converted $f has SHA-256 $got, not the pinned $sum: see $MLX_SERVE_HOME/convert.log"

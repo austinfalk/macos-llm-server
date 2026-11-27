@@ -27,11 +27,17 @@ ZIG_SHA256=b607e9b9234790a008116ae5bdb71c6243b84b9fb42a53a9e70fde41c06c536a
 LLAMA_DYLIB_SHA256=01e5a4a3746bb25f1a817c1fa609448a3171f6cfb5f56a9122407d4c2c920c88
 
 # --- the model ----------------------------------------------------------------
-# OpenUncensored's abliteration of Thinking Machines' Inkling 2 Mini, in the
-# release's own format. config/model-source.sha256 lists the files
+# Thinking Machines' Inkling 2 Mini, the release itself (NVFP4 and MXFP8
+# experts, the rest BF16). config/model-source.sha256 lists the files
 # 1-install.sh downloads at this revision, with their sizes and checksums.
-LLM_SOURCE_REPO=OpenUncensored/Inkling-2-Mini-Uncensored
-LLM_SOURCE_REVISION=4e5f06d72b5a70c9dcd5e8046aea576eb3ee8487
+LLM_SOURCE_REPO=thinkingmachines/Inkling-2-Mini
+LLM_SOURCE_REVISION=c9d028302cd0f035fdf8e7e91f089a4ce94d2195
+
+# AtomicChat's uncensoring of it: a rank-1 LoRA, one unit direction a layer,
+# which scripts/merge-uncensoring.py applies to the converted pack's weights
+# (docs/findings.md, "The pack"). Its one file is in config/adapter-source.sha256.
+LLM_ADAPTER_REPO=AtomicChat/Inkling-2-Mini-Uncensored-GGUF
+LLM_ADAPTER_REVISION=c311009ce2b34e35c07a0f374b7eeff24a8d95c6
 
 # Inco's DFlash 2 draft model for Inkling 2 Mini, which namp's patch drafts with
 # on M1 and M2. config/draft-source.sha256 lists its files with their checksums.
