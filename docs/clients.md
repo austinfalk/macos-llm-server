@@ -31,7 +31,7 @@ Four facts shape every config:
 
 - **One model ID** for every model setting, helpers and subagents included:
   the `Model` line `3-services.sh` printed. The config below uses the default,
-  `Inkling-2-Mini-Uncensored-q4attn`. If the server's differs, replace it everywhere.
+  `Inkling-2-Mini-Uncensored-8bit`. If the server's differs, replace it everywhere.
   mlx-serve answers a name it does not know with its one model instead of an
   error, so a wrong ID goes unnoticed.
 - **No sampling settings.** mlx-serve applies the model's own defaults when a
@@ -61,7 +61,7 @@ So keep sessions going and turn off MCP servers a session does not need. Request
 Inkling's default ([findings](findings.md#reasoning-effort)), so OpenCode
 needs no setting. For a quicker answer on one OpenCode task, press
 **Ctrl+T** in the TUI, or run
-`opencode run --model tailnet/Inkling-2-Mini-Uncensored-q4attn#medium`.
+`opencode run --model tailnet/Inkling-2-Mini-Uncensored-8bit#medium`.
 
 ## 1. Tailscale
 
@@ -115,7 +115,7 @@ printf 'header = "Authorization: Bearer %s"\n' "$(cat ~/.config/llm-server/api-k
 curl -s -o /dev/null -w '%{http_code}\n' "$ENDPOINT/v1/models"
 ```
 
-The first prints `"id":"Inkling-2-Mini-Uncensored-q4attn"` and
+The first prints `"id":"Inkling-2-Mini-Uncensored-8bit"` and
 `"context_length":262144`, the second `401`.
 
 ## 3. OpenCode
@@ -126,7 +126,7 @@ Install OpenCode 2 from [its docs](https://opencode.ai/docs).
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "tailnet/Inkling-2-Mini-Uncensored-q4attn",
+  "model": "tailnet/Inkling-2-Mini-Uncensored-8bit",
   "providers": {
     "tailnet": {
       "name": "LLM server",
@@ -137,7 +137,7 @@ Install OpenCode 2 from [its docs](https://opencode.ai/docs).
         "chunkTimeout": 3600000
       },
       "models": {
-        "Inkling-2-Mini-Uncensored-q4attn": {
+        "Inkling-2-Mini-Uncensored-8bit": {
           "name": "Inkling 2 Mini Uncensored",
           "capabilities": {
             "reasoning": {"supported": true, "effort": ["low", "medium", "high"]}
@@ -148,9 +148,9 @@ Install OpenCode 2 from [its docs](https://opencode.ai/docs).
     }
   },
   "agents": {
-    "title": {"model": "tailnet/Inkling-2-Mini-Uncensored-q4attn"},
-    "summary": {"model": "tailnet/Inkling-2-Mini-Uncensored-q4attn"},
-    "compaction": {"model": "tailnet/Inkling-2-Mini-Uncensored-q4attn"}
+    "title": {"model": "tailnet/Inkling-2-Mini-Uncensored-8bit"},
+    "summary": {"model": "tailnet/Inkling-2-Mini-Uncensored-8bit"},
+    "compaction": {"model": "tailnet/Inkling-2-Mini-Uncensored-8bit"}
   },
   "permissions": [
     {"action": "edit", "resource": "*", "effect": "ask"},
@@ -217,7 +217,7 @@ Why:
 ```sh
 opencode run --standalone "Reply with the single word OK."
 opencode run --standalone -c "Now reply with the single word YES."
-opencode models --standalone | grep '^tailnet/'    # tailnet/Inkling-2-Mini-Uncensored-q4attn
+opencode models --standalone | grep '^tailnet/'    # tailnet/Inkling-2-Mini-Uncensored-8bit
 ```
 
 Without `--standalone`, these commands use a background `opencode serve`,

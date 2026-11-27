@@ -5,7 +5,7 @@ measurements behind them. The server is a MacBook Pro 16" (M1 Max, 32-core
 GPU, 64 GB) on macOS 27.x. Items marked *(sourced)* come from the linked
 references and were not reproduced here. Items marked *(source)* were read
 from mlx-serve's code at the pinned tag, not measured. Everything else was
-measured on 2026-11-23, 2026-11-24 and 2026-11-25 with the Mac to itself: no other model
+measured from 2026-11-23 to 2026-11-27 with the Mac to itself: no other model
 server, no download or build running, on AC power.
 
 The goal is Inkling 2 Mini, in MLX weights, decoding at the limit this Mac's
@@ -16,8 +16,8 @@ parts, each chosen by measurement and replaceable by a faster one:
 | Part | Choice | Against |
 |---|---|---|
 | Engine | Upstream mlx-serve 26.11.4-pre-release.1, built from source, with namp's M1/M2 patch and this repo's speed patch | The same build without each patch, and Splash 1.7.3-m1 for M1/M2 |
-| Model | OpenUncensored's Inkling 2 Mini Uncensored, converted by upstream's converter: attention 4-bit, embedding and head 6-bit, experts as released | The 8-bit pack of the stock model, and namp's 4-bit requant |
-| Flags | A 262,144-token window, a 24 GB prefix cache, 4,096-token prefill chunks, 4-bit KV cache, larger MLX command buffers | mlx-serve's defaults, and 8-bit or full KV |
+| Model | Thinking Machines' release, converted 8-bit by upstream's converter with the experts as released, and AtomicChat's uncensoring merged in | OpenUncensored's uncensored release at 4- and 8-bit attention, the stock release at 4, 5, 6 and 8 bits |
+| Flags | A 262,144-token window, a 16 GB prefix cache, 4,096-token prefill chunks, 8-bit KV cache, larger MLX command buffers | mlx-serve's defaults, and 4-bit or full KV |
 
 ## How it was measured
 
@@ -139,7 +139,7 @@ head, and copied spans still come first; acceptance stays exact. The
 LaunchAgent names its folder in `INKLING_DFLASH2_DIR`, and `1-install.sh`
 downloads it, pinned by revision and checksum. The same commit adds a tool
 that grafts Lucebox's "Fast" fine-tune into every layer's attention output
-projection: a different model, on the tensors that hold OpenUncensored's
+projection: a different model, on the tensors that hold the uncensoring's
 ablation, so it was not tried.
 
 Against the build before it, in the order before, DFlash 2, before,
@@ -239,41 +239,62 @@ reads prompts faster and answers follow-ups sooner.
 
 ## The pack
 
-OpenUncensored's
-[Inkling-2-Mini-Uncensored](https://huggingface.co/OpenUncensored/Inkling-2-Mini-Uncensored)
-is the release with refusals ablated. It ships in the release's own format,
-and only its 20 attention output projections differ from the release; the
-draft head is byte-identical to the stock pack's. mlx-serve reads MLX packs,
-so `1-install.sh` converts it with upstream's own
-`tests/convert_inkling2.py`, which keeps the routed experts' bytes (NVFP4 and
-MXFP8) and quantizes the rest.
+The pack is the one closest to Thinking Machines' release that this Mac runs
+at speed, with refusals removed. Each candidate was scored against the
+release itself (`thinkingmachines/Inkling-2-Mini` at `c9d02830`), served by
+plain upstream mlx-serve at the pinned tag with full KV, using upstream's
+`tests/inkling2_kld.py` over its 8 files: 14,724 positions at 6,000
+characters a file, and 58,998 positions over 100,000 characters each of two
+of them. The long pass is the one below; the short pass ranks every pack the
+same way. Speed is decode on this setup, greedy, short prompts and at 71K
+tokens:
 
-Five packs, decode on the patched engine with the base flags. The uncensored
-packs are scored against the uncensored release; the stock 4-bit pack against
-the stock 8-bit pack, since the stock release was not downloaded here (the
-8-bit pack's card puts it at 0.0040 from its release *(sourced)*):
+| Pack | KV | Mean KLD | Top-1 | Perplexity | Decode | At 71K |
+|---|---|---|---|---|---|---|
+| The release, mlx-serve with both patches | full | 0.0041 | 96.9% | 7.26 | 18 tok/s | 8 |
+| Stock 8-bit (upstream's converter, `--bits 8`) | 8-bit | 0.0052 | 96.5% | | 54.1 | 36.1 |
+| Stock, attention 6-bit, k and v 8-bit | 8-bit | 0.0070 | 96.0% | | 54.9 | 36.7 |
+| Stock, attention 6-bit | 8-bit | 0.0077 | 95.7% | | 55.0 | 35.8 |
+| **Stock 8-bit with AtomicChat's uncensoring** | **8-bit** | **0.0110** | **94.7%** | **7.26** | **52.7** | **34.9** |
+| Stock, attention 5-bit | 8-bit | 0.0127 | 94.6% | | 51.3 | 36.1 |
+| Stock, attention 4-bit | 8-bit | 0.0275 | 91.7% | | 57.6 | 39.0 |
+| OpenUncensored, attention 4-bit (the previous pack) | 8-bit | 0.0418 | 90.1% | | 56.6 | 36.5 |
+| OpenUncensored, attention 4-bit (the previous pack) | 4-bit | 0.0548 | 88.5% | | 58.7 | 40.0 |
 
-| Pack | Built by | Decode | Mean KLD | Top-1 | Perplexity |
-|---|---|---|---|---|---|
-| Stock, 8-bit (`ddalcu/Inkling-2-Mini-MLX-8bit`) | upstream's converter, `--bits 8` | 47.9-48.0 tok/s | reference | | 5.173 |
-| Stock, 4-bit attention | namp's requant of the 8-bit pack | 50.9 tok/s | 0.0185 | 94.0% | 5.244 |
-| Uncensored, 8-bit | upstream's converter, `--bits 8` | 47.9 tok/s | 0.0042 | 97.1% | 5.217 |
-| Uncensored, 4-bit attention | namp's requant of the 8-bit pack | 51.5-51.6 tok/s | 0.0188 | 94.0% | 5.262 |
-| **Uncensored, 4-bit attention** | **upstream's converter, `--bits 4 --embed-bits 6 --head-bits 6`** | **51.7 tok/s** | **0.0189** | **94.0%** | **5.276** |
+- **The floor is about 0.004.** Two exact computations of the release differ
+  by that much: this repo's build against plain upstream 0.0041, and mlx-lm's
+  draft support for Inkling 2 (PR #2086 at `e2b5bbd3`) against plain upstream
+  0.0043.
+- **The costs add up.** 4-bit KV costs about 0.02 KLD, OpenUncensored's
+  ablation about 0.02, 4-bit attention 0.015 to 0.022. 8-bit KV costs about
+  0.001. 6-bit attention closes 88% of the gap from 4-bit to 8-bit but decodes
+  only 2% faster than 8-bit; 5-bit is slower than 6-bit and less exact.
+- **AtomicChat's uncensoring costs 0.006**, against OpenUncensored's 0.02,
+  and leaves perplexity at 7.263 against the release's 7.261. Its adapter
+  ([`AtomicChat/Inkling-2-Mini-Uncensored-GGUF`](https://huggingface.co/AtomicChat/Inkling-2-Mini-Uncensored-GGUF),
+  `Inkling-2-Mini-Uncensored-LoRA.gguf`) is rank 1 at 49 sites: each layer's
+  attention output, its 128 expert down projections and the embedding. At
+  each, lora_b is a unit direction r and lora_a is exactly -W^T r (correlation
+  1.0000 against the release), so it is the projection W' = (I - r r^T) W.
+  `scripts/merge-uncensoring.py` applies that to the weights: the attention
+  output and embedding from the release's BF16, quantized 8-bit once, and the
+  expert banks decoded, projected and encoded again in their own NVFP4 or
+  MXFP8. Encoding an unedited bank that way returns the release's bytes
+  exactly, so the merge changes nothing else. GGUF is only read for the
+  directions; the server reads MLX weights.
+- **It removes refusals.** Of 12 borderline asks (a roast, lock picking, a
+  phishing sample, hotwiring in a story, tracking a teen's phone and the
+  like), the stock 8-bit pack declined 9; the merged pack and the previous
+  pack declined none.
+- **The install builds it exactly.** Upstream's converter at `--bits 8`
+  reproduces `ddalcu/Inkling-2-Mini-MLX-8bit` byte for byte, and the merge
+  gives the same bytes on every run and on the converter's pinned mlx 0.32.4,
+  so `config/model-pack.sha256` pins the result.
 
-- **Uncensored costs no speed.** Its 8-bit pack decodes as fast as the stock
-  one, and reads prompts as fast. Against the stock pack, its output differs
-  by 0.0177 KLD, about what 4-bit attention costs.
-- **4-bit attention is 7.5% faster at decode**, at 0.019 KLD and 94% top-1
-  agreement. Prompt reading and follow-ups are unchanged, and the pack is
-  17.5 GB against the 8-bit pack's 18.7.
-- **Upstream's converter matches namp's requant.** Converted from the release
-  in one step, it scores the same as namp's two steps (release to 8-bit to
-  4-bit) and decodes as fast, so the install needs nothing of namp's but the
-  engine patch. Its pack is 17.5 GB, and converting it took 7 s.
-
-**Kept:** the last row. The four lossy packs differ from their release by
-about the same amount, so the choice is speed and the uncensored model.
+**Kept:** the stock 8-bit pack with AtomicChat's uncensoring and 8-bit KV,
+5 times closer to the release than the previous pack, for 8% of decode at
+short prompts and 14% at 71K ([Measurements](#measurements)). The release
+itself decodes at 18 tok/s here: its BF16 attention has no fast M1 path.
 
 ## Settings
 
@@ -281,7 +302,7 @@ Everything is mlx-serve's default except the LaunchAgent, ten flags, two MLX
 variables ([Command buffers](#command-buffers)) and one generation rule
 (README, "How it works").
 
-- `--model ~/.mlx-serve/models/local/Inkling-2-Mini-Uncensored-q4attn`, the
+- `--model ~/.mlx-serve/models/local/Inkling-2-Mini-Uncensored-8bit`, the
   converted pack. mlx-serve reads `--model` as a path and names the model
   after the folder's last part *(source: `src/main.zig`)*. It serves a request
   naming an unknown model with its one model instead of answering 404
@@ -301,15 +322,16 @@ variables ([Command buffers](#command-buffers)) and one generation rule
   memory free at each start, 130K to 500K tokens here, and a window that moves
   breaks a client's configured limit. The model takes 1,048,576, but reading
   262,144 cold already takes about 20 minutes on this Mac.
-- `--prefix-cache-mem 24GB`. mlx-serve grants less than it is asked, after the
-  weights, the window's KV and the prefill's reserve: about 23 GB with this pack
-  and 4-bit KV. The default left 0 to 2.3 GB, too little for one long
-  conversation.
+- `--prefix-cache-mem 16GB`. The default left 0 to 2.3 GB, too little for one
+  long conversation. 16 GB keeps two long conversations (129K and 111K) and a
+  242K one cached in 8-bit KV. At 24 GB mlx-serve granted 18.5-20 GB, and a
+  cold 242K prompt behind two cached long ones ran out of GPU memory in
+  prefill: its admission check saw 11.2 GB free for a 10.6 GB need.
 - `--prefill-chunk 4096`. Without it, mlx-serve shrinks the chunk to pay for a
   larger cache, down to 512 tokens. 4,096 reads as fast as 8,192, and keeps a
   242K follow-up cached where 8,192 missed: with 8,192, the conversation's
   last cache point fell behind the sliding window.
-- `--kv-quant 4`. The KV cache in 4 bits, read by the patch's fused attention
+- `--kv-quant 8`. The KV cache in 8 bits, read by the patch's fused attention
   ([Context depth](#context-depth)).
 - `--log-file off`. launchd already writes mlx-serve's output to
   `~/Library/Logs/llm-server/mlx-serve.log`.
@@ -362,20 +384,25 @@ pack, and the 129K row the stock 8-bit pack:
 | 129K | 22.8 | 27.9 |
 
 4-bit KV loses 7% on short prompts and wins from 8K tokens up, by 18% at 71K
-and 22% at 129K. An agent's first prompt is already 8-20K tokens. Prompt
-reading is unchanged, peak wired memory falls by 11.6 GB (39.6 to 28.0), and mlx-serve's
-cache grant grows from 17.2 to about 23 GB. The 129K needle passed 3 of 3. 8-bit
-KV was slower than 4-bit everywhere: 44.6 tok/s short, 24.4 at 129K.
-**Kept: 4-bit.**
+and 22% at 129K. Prompt reading is unchanged, and peak wired memory falls by
+11.6 GB (39.6 to 28.0). That run, before the patch's later kernels, put 8-bit
+KV slower than 4-bit everywhere: 44.6 tok/s short, 24.4 at 129K.
+
+Scored against the release, though, 4-bit KV is the largest single cost: 0.02
+KLD, where 8-bit costs 0.001 ([The pack](#the-pack)). On the final engine,
+the previous pack with 8-bit KV against 4-bit decoded 4% slower short and
+7-9% slower at 36K and 71K. **Kept: 8-bit**, for the pack closest to the
+release.
 
 ### Tried and rejected
 
 | Change | Result |
 |---|---|
-| `--kv-quant 8` | Slower than 4-bit at every depth (above) |
+| `--kv-quant 4` | 4% faster short and 9% at 71K, but 0.02 KLD from the release where 8-bit costs 0.001 (above) |
 | Prefill chunk 8192 against 4096 | Equal reading speed; a 242K follow-up missed the cache |
 | Prefill chunk 2048 | 8-10% slower reading at 3K and 12K, and a 38K follow-up missed |
-| Prefix cache 8 GB | A 242K conversation did not fit, so its follow-up read cold for 20 min |
+| Prefix cache 8 GB, 4-bit KV | A 242K conversation did not fit, so its follow-up read cold for 20 min |
+| Prefix cache 24 GB, 8-bit KV | A cold 242K prompt behind two cached long conversations ran out of GPU memory |
 | `--ssm-checkpoint-max 0` | No change |
 | `--max-concurrent 2` | Inside the controls |
 | `--prefix-cache-disk 40GB` | Follow-ups of two long conversations both read cold, where the RAM cache alone serves one |
@@ -418,36 +445,39 @@ back exact 18 of 20 times at `medium` against 22 of 32 at `none`.
 
 ## Measurements
 
-The final setup (both patches, the converted uncensored pack, the DFlash 2 drafter, the
-flags and MLX variables above, built clean by `1-install.sh`, three panels
-and the gates on 2026-11-26), against the stock release that started 2026-11-23, mlx-serve
-26.11.4-pre-release.1 with the 8-bit stock pack and the same window, cache
-and chunk:
+The final setup (both patches, the merged 8-bit pack, 8-bit KV, the DFlash 2
+drafter, the flags and MLX variables above, a panel between two of the
+previous setup and the gates on 2026-11-27), against the stock release that
+started 2026-11-23, mlx-serve 26.11.4-pre-release.1 with the 8-bit stock pack
+and the same window, cache and chunk. The previous setup (OpenUncensored,
+4-bit attention, 4-bit KV) is in the last column, from the same window:
 
-| Metric | Stock release | Final |
-|---|---|---|
-| Decode, greedy, short prompts | 43.8 tok/s | 57.3-58.2 tok/s |
-| Decode, sampled as OpenCode asks, short prompts | not measured | 56.3-57.5 tok/s |
-| Whole-file edits, greedy, 1-4K / behind 31K of context | not measured | 283-286 / 220 chars/s |
-| Thinking at `medium`, sampled | not measured | 59.2-62.6 tok/s |
-| Decode at 36K / 71K tokens | not measured | 45.7-46.6 / 40.0-41.5 tok/s |
-| Decode at 129K / 242K tokens | 22.1 / 16 tok/s | 27.9 (8-bit pack) / 21.7 tok/s, before namp's update; not measured since |
-| Two / four requests at once, together | 42.7 tok/s / not measured | 48.0-48.1 / 68.1-68.3 tok/s |
-| Prompt reading at 10K / 30K tokens | not measured / 362-371 tok/s | 421 / 377-380 tok/s |
-| Cold read, 128.7K / 241.7K tokens | 8.0 / 20.1 min | 7.7 / 19.4 min |
-| First token of a follow-up at 2.9K / 10K / 30K | 0.81 / 0.87 / 1.07 s | 0.45-0.46 / 0.49-0.50 / 0.61-0.63 s |
-| OpenCode-shaped follow-ups at 3K / 12K / 39K | 0.6 / 0.7 / 1.0-1.6 s | 0.48 / 0.53 / 0.65 s |
-| Reasoning split from the answer when streaming without tools | no (#1292) | yes |
-| Two long conversations (129K, 111K), follow-up on each | the first cached, the second read cold | both cached, first token in 1.0-1.2 s |
-| Follow-up at 242K tokens | cached, first token 3.3 s | cached, full answer in 7.8-22.8 s |
-| Graded follow-ups | 16 of 16 | 16 of 16 |
-| Three codes in a 129K / 242K-token prompt | 3 of 3 / 3 of 3 | 3 of 3 / 3 of 3 |
-| Start to ready, pack in the page cache | 2-4 s | 3.2-4.3 s |
-| Peak wired memory, panel | 37-39 GB | 30 GB |
+| Metric | Stock release | Final | Previous |
+|---|---|---|---|
+| Decode, greedy, short prompts | 43.8 tok/s | 52.7 tok/s | 56.5-58.2 |
+| Decode, sampled as OpenCode asks, short prompts | not measured | 51.1 tok/s | 57.1-58.4 |
+| Whole-file edits, greedy, 1-4K | not measured | 286 chars/s | 292-294 |
+| Thinking at `medium`, sampled | not measured | 55.2 tok/s | 60.5-62.2 |
+| Decode at 36K / 71K tokens | not measured | 40.5 / 34.9 tok/s | 45.6-47.1 / 40.6-41.2 |
+| Two / four requests at once, together | 42.7 tok/s / not measured | 45.4 / 62.8 tok/s | 48.0-48.2 / 68.1-68.3 |
+| Prompt reading at 10K / 30K tokens | not measured / 362-371 tok/s | 419 / 379 tok/s | 420-421 / 380 |
+| Cold read, 128.7K / 241.7K tokens | 8.0 / 20.1 min | 8.2 / 20.6 min | 7.7 / 19.4 |
+| First token of a follow-up at 2.9K / 10K / 30K | 0.81 / 0.87 / 1.07 s | 0.47 / 0.52 / 0.63 s | 0.45-0.46 / 0.49-0.50 / 0.62 |
+| OpenCode-shaped follow-ups at 3K / 12K / 39K | 0.6 / 0.7 / 1.0-1.6 s | 0.49 / 0.54 / 0.67 s | 0.48 / 0.53 / 0.65 |
+| Reasoning split from the answer when streaming without tools | no (#1292) | yes | yes |
+| Two long conversations (129K, 111K), follow-up on each | the first cached, the second read cold | both cached, first token in 1.1-1.5 s | both cached |
+| Follow-up at 242K tokens | cached, first token 3.3 s | cached, full answer in 30 s | cached, 7.8-22.8 s |
+| Graded follow-ups | 16 of 16 | 16 of 16 | 16 of 16 |
+| Three codes in a 129K / 242K-token prompt | 3 of 3 / 3 of 3 | 3 of 3 / 3 of 3 | 3 of 3 / 3 of 3 |
+| Refusals, 12 borderline asks | 9 (stock 8-bit pack) | 0 | 0 |
+| Mean KLD from the release, top-1 | 0.0052, 96.5% (with 8-bit KV) | 0.0110, 94.7% | 0.0548, 88.5% |
+| Start to ready, pack in the page cache | 2-4 s | 4.3 s | 4.3 s |
+| Peak wired memory, panel | 37-39 GB | 37.6 GB | 30.1-30.6 GB |
 
 The first token of a short prompt varied from 295 to 500 ms between runs of
 the same setup, so it is not compared. A follow-up's full answer at 242K takes as long as its reasoning runs, at
-about 20 tokens a second.
+about 20 tokens a second. Decode at 129K and 242K was not measured on the
+final setup.
 
 One edit, a rename in `verify.sh`, sometimes comes back wrong. The model
 writes the whole file but puts a backslash before each double quote of an awk
@@ -472,10 +502,14 @@ few tokens of reasoning decide which way it goes.
 
 ### How close to the limit
 
-A plain decode step reads 3.26 GB: 1.84 GB of the 8 routed experts in each of
-48 layer visits, 1.04 GB of attention and gates over the same visits, and the
-0.38 GB head. The GPU reads 342 GB/s here, so one token a step cannot beat
-105 tok/s; with drafting off a step takes 17.2 ms, 58 tok/s, 55% of that.
+A plain decode step of the final pack reads about 4.0 GB: 1.84 GB of the 8
+routed experts in each of 48 layer visits, 1.69 GB of 8-bit attention and
+gates over the same visits, and the 0.50 GB 8-bit head *(counted from the
+pack's tensors)*. The GPU reads 342 GB/s here, so one token a step cannot
+beat 85 tok/s; the final setup decodes 52.7, 62% of that, with drafting. The
+previous pack, with 4-bit attention and a 6-bit head, read 3.26 GB a step,
+a 105 tok/s ceiling; with drafting off its step took 17.2 ms, 58 tok/s. The
+analysis below was measured on that pack.
 
 - **The experts** run near 280 GB/s, 82% of the limit. A Metal System Trace
   with GPU counters shows read bandwidth at its peak during them and a mean of
@@ -520,8 +554,10 @@ From the notes of the plugin that serves Inkling 2,
   https://github.com/ddalcu/mlx-serve/releases/tag/v26.11.4-pre-release.1,
   its docs and code at the tag: https://github.com/ddalcu/mlx-serve/tree/v26.11.4-pre-release.1
 - The patch's source: https://github.com/namp/mlx-serve-inkling2-m1
-- The model: https://huggingface.co/OpenUncensored/Inkling-2-Mini-Uncensored
-- The base model: https://huggingface.co/thinkingmachines/Inkling-2-Mini
+- The model: https://huggingface.co/thinkingmachines/Inkling-2-Mini
+- The uncensoring adapter: https://huggingface.co/AtomicChat/Inkling-2-Mini-Uncensored-GGUF
+- The previous pack's source: https://huggingface.co/OpenUncensored/Inkling-2-Mini-Uncensored
+- mlx-lm's draft support for Inkling 2: https://github.com/ml-explore/mlx-lm/pull/2086
 - Upstream issue #1292 (reasoning in `content` when streaming without tools)
   and #1308 (decode collapse on long generations on an M1 Max):
   https://github.com/ddalcu/mlx-serve/issues
