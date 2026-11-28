@@ -13,3 +13,6 @@ id_*
 
 .DS_Store
 __pycache__/
+
+# bench/ results, logs and the rebuilt corpus
+bench/out/

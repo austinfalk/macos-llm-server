@@ -217,6 +217,41 @@ mlx_serve_version() {
 	fi 2>/dev/null | awk 'NR == 1 && $1 == "mlx-serve" {print $2}'
 }
 
+# lay_out_build SRC OUT VERSION LOG: mlx-serve built in SRC, laid out and signed
+# in OUT as upstream's release workflow packages the command line build: the
+# binary, with its libraries in lib/ beside it. 1-install.sh and bench/build.sh.
+lay_out_build() {
+	_s=$1 _o=$2 _v=$3 _log=$4
+	b=$_o/mlx-serve
+	webp=$(brew --prefix webp)/lib
+	# Each install_name_tool change voids a signature, with a warning on
+	# stderr; everything is signed again after.
+	{
+		mkdir -p "$_o/lib" &&
+		cp "$_s/zig-out/bin/mlx-serve" "$_s/LICENSE" "$_s/LICENSE-APACHE-2.0" "$_s/NOTICE" "$_o/" &&
+		cp "$_s"/lib/mlx/lib/*.dylib "$_s/lib/mlx/lib/mlx.metallib" "$_s/lib/llama/lib/libllama.dylib" \
+			"$webp/libwebp.dylib" "$webp/libsharpyuv.dylib" "$_o/lib/" &&
+		install_name_tool -change @rpath/libmlxc.dylib @executable_path/lib/libmlxc.dylib \
+			-change @rpath/libmlx.dylib @executable_path/lib/libmlx.dylib \
+			-change @rpath/libllama.dylib @executable_path/lib/libllama.dylib \
+			-change "$(otool -L "$b" | awk '/libwebp/ {print $1}')" @executable_path/lib/libwebp.dylib "$b" &&
+		install_name_tool -change @rpath/libmlx.dylib @loader_path/libmlx.dylib "$_o/lib/libmlxc.dylib" &&
+		install_name_tool -change "$(otool -L "$_o/lib/libwebp.dylib" | awk '/libsharpyuv/ {print $1}')" \
+			@loader_path/libsharpyuv.dylib "$_o/lib/libwebp.dylib"
+	} 2>>"$_log" || die "could not lay out the build: see $_log"
+	# The build's own search paths point back into the source tree, which from
+	# here resolve outside the build folder. Keep only the folder's lib/.
+	otool -l "$b" | awk '$1 == "path" {print $2}' | grep -v -x '@executable_path/lib' | while read -r r; do
+		install_name_tool -delete_rpath "$r" "$b" 2>/dev/null || die "could not remove the search path $r"
+	done
+	install_name_tool -add_rpath @loader_path "$_o/lib/libmlx.dylib" 2>/dev/null || :
+	for l in "$_o"/lib/*.dylib; do codesign --force --sign - "$l" 2>/dev/null || die "could not sign $l"; done
+	codesign --force --sign - --entitlements "$_s/app/mlx-serve.entitlements" "$b" 2>/dev/null || die "could not sign mlx-serve"
+	stray=$(otool -L "$b" | awk 'NR > 1 {print $1}' | grep -v -E '^(/usr/lib/|/System/|@executable_path/lib/)') || :
+	[ -z "$stray" ] || die "the build links a library it does not carry: $stray"
+	[ "$("$b" --version 2>/dev/null | awk 'NR == 1 {print $2}')" = "$_v" ] || die "the staged mlx-serve does not report $_v"
+}
+
 # --- templates ----------------------------------------------------------------
 # render TEMPLATE DEST MODE OWNER:GROUP
 # Fills @PLACEHOLDERS@ in config/TEMPLATE and installs it atomically. Refuses

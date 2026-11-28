@@ -103,34 +103,7 @@ else
 	rm -rf "$MLX_SERVE_HOME"/.staging.*
 	out=$MLX_SERVE_HOME/.staging.$$
 	trap 'rm -rf "${tmp:-}" "$out"' EXIT
-	b=$out/mlx-serve
-	webp=$(brew --prefix webp)/lib
-	# Each install_name_tool change voids a signature, with a warning on
-	# stderr; everything is signed again after.
-	{
-		mkdir -p "$out/lib" &&
-		cp "$S/zig-out/bin/mlx-serve" "$S/LICENSE" "$S/LICENSE-APACHE-2.0" "$S/NOTICE" "$out/" &&
-		cp "$S"/lib/mlx/lib/*.dylib "$S/lib/mlx/lib/mlx.metallib" "$S/lib/llama/lib/libllama.dylib" \
-			"$webp/libwebp.dylib" "$webp/libsharpyuv.dylib" "$out/lib/" &&
-		install_name_tool -change @rpath/libmlxc.dylib @executable_path/lib/libmlxc.dylib \
-			-change @rpath/libmlx.dylib @executable_path/lib/libmlx.dylib \
-			-change @rpath/libllama.dylib @executable_path/lib/libllama.dylib \
-			-change "$(otool -L "$b" | awk '/libwebp/ {print $1}')" @executable_path/lib/libwebp.dylib "$b" &&
-		install_name_tool -change @rpath/libmlx.dylib @loader_path/libmlx.dylib "$out/lib/libmlxc.dylib" &&
-		install_name_tool -change "$(otool -L "$out/lib/libwebp.dylib" | awk '/libsharpyuv/ {print $1}')" \
-			@loader_path/libsharpyuv.dylib "$out/lib/libwebp.dylib"
-	} 2>>"$MLX_SERVE_HOME/build.log" || die "could not lay out the build: see $MLX_SERVE_HOME/build.log"
-	# The build's own search paths point back into the source tree, which from
-	# here resolve outside the build folder. Keep only the folder's lib/.
-	otool -l "$b" | awk '$1 == "path" {print $2}' | grep -v -x '@executable_path/lib' | while read -r r; do
-		install_name_tool -delete_rpath "$r" "$b" 2>/dev/null || die "could not remove the search path $r"
-	done
-	install_name_tool -add_rpath @loader_path "$out/lib/libmlx.dylib" 2>/dev/null || :
-	for l in "$out"/lib/*.dylib; do codesign --force --sign - "$l" 2>/dev/null || die "could not sign $l"; done
-	codesign --force --sign - --entitlements "$S/app/mlx-serve.entitlements" "$b" 2>/dev/null || die "could not sign mlx-serve"
-	stray=$(otool -L "$b" | awk 'NR > 1 {print $1}' | grep -v -E '^(/usr/lib/|/System/|@executable_path/lib/)') || :
-	[ -z "$stray" ] || die "the build links a library it does not carry: $stray"
-	[ "$("$b" --version 2>/dev/null | awk 'NR == 1 {print $2}')" = "$MLX_SERVE_BUILD" ] || die "the staged mlx-serve does not report $MLX_SERVE_BUILD"
+	lay_out_build "$S" "$out" "$MLX_SERVE_BUILD" "$MLX_SERVE_HOME/build.log"
 	rm -rf "${MLX_SERVE_HOME:?}/$MLX_SERVE_BUILD"
 	mv "$out" "$MLX_SERVE_HOME/$MLX_SERVE_BUILD"
 	trap - EXIT
