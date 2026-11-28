@@ -422,10 +422,15 @@ chunk, does not depend on the engine or the pack.
 
 ## Reasoning effort
 
-Inkling's chat template maps an effort word to a level, `low` 0.2, `medium`
-0.7, `high` 0.9 and `xhigh` 0.99, and uses 0.9 when a request names none
-*(sourced: the pack's `chat_template.jinja`)*. OpenCode names none unless
-you pick a variant, so every turn would think at `high`.
+Inkling's chat template maps an effort word to a level, `none` 0.0,
+`minimal` 0.1, `low` 0.2, `medium` 0.7, `high` 0.9, and `xhigh` and `max`
+0.99, and uses 0.9 when a request names none *(sourced: the pack's
+`chat_template.jinja`)*. mlx-serve passes each word through *(source:
+`src/host/chat/effort.zig`)*, and OpenCode sends its variant's word
+unchanged *(measured: OpenCode 2.4.1, all seven)*. At `none` the model still
+reasons briefly: 204 characters on a one-line puzzle, against 271 at `high`
+*(measured)*. OpenCode names no effort unless you pick a variant, so every
+turn would think at `high`.
 
 `~/.mlx-serve/generation-settings.json` holds rules for request fields. A
 rule fills a field the request leaves out; `"ignore_client": true` would make
