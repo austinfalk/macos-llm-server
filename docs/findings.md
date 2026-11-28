@@ -21,6 +21,8 @@ parts, each chosen by measurement and replaceable by a faster one:
 
 ## How it was measured
 
+The harness is in [`bench/`](../bench/README.md).
+
 - **The panel.** Six greedy decode prompts with thinking off (median of
   six), three sampled prompts at the server's default effort, two requests
   at once, prompt reading at 0.8K, 2.9K, 10K and 30K tokens, the first token

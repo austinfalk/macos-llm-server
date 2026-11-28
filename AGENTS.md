@@ -29,6 +29,10 @@ scripts do not run there.
 - `docs/findings.md` holds the measurements behind the engine, the patch, the
   model pack and each flag.
 - `docs/clients.md` is the guide for connecting a client.
+- `bench/` is the measuring harness: the speed workloads, the KLD score
+  against the release, the gates and the refusal check, run in a window that
+  stops production and restores it. `bench/README.md` lists the sources to
+  watch and the path a candidate takes.
 - `scripts/` holds the numbered setup steps, `verify.sh` and `uninstall.sh`.
   Every script sources `lib.sh`, which sources `pins.sh`.
 - `scripts/pins.sh` pins everything downloaded: the mlx-serve tag and commit,
@@ -127,6 +131,10 @@ upstream now ships.
   `bootstrap` fails.
 
 ## Measuring
+
+Measure with `bench/`, so every number comes from the same prompts, corpus
+and timing. Change the harness only in its own PR, and run the current
+setup again after the change before you compare against older numbers.
 
 - Stop the server first and run one GPU job at a time. A second job, a model
   download or a build skews every number.
