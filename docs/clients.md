@@ -57,10 +57,15 @@ the prompt again, from the start when the change is more than about 2,000
 tokens back ([findings](findings.md#what-mlx-serves-notes-say-about-this-model)).
 So keep sessions going and turn off MCP servers a session does not need. Requests share the GPU, so run one agent at a time.
 
+**What the model takes.** Text and images in, text out, with tool calls
+and JSON output to a schema (`response_format`). `/v1/models` lists these as
+`capabilities` and `input_modalities`. OpenCode sends an attached image with
+the config below as it is.
+
 **Reasoning effort.** A request that names no effort thinks at `high`,
 Inkling's default ([findings](findings.md#reasoning-effort)), so OpenCode
-needs no setting. For a quicker answer on one OpenCode task, press
-**Ctrl+T** in the TUI, or run
+needs no setting. The model takes seven words, from `none` to `max`. For a
+quicker answer on one OpenCode task, press **Ctrl+T** in the TUI, or run
 `opencode run --model tailnet/Inkling-2-Mini-Uncensored-8bit#medium`.
 
 ## 1. Tailscale
@@ -140,7 +145,7 @@ Install OpenCode 2 from [its docs](https://opencode.ai/docs).
         "Inkling-2-Mini-Uncensored-8bit": {
           "name": "Inkling 2 Mini Uncensored",
           "capabilities": {
-            "reasoning": {"supported": true, "effort": ["low", "medium", "high"]}
+            "reasoning": {"supported": true, "effort": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]}
           },
           "limit": {"context": 262144, "input": 229376, "output": 32768}
         }
@@ -200,8 +205,10 @@ Why:
 - `agents`: OpenCode's docs do not say which model the hidden `title`,
   `summary` and `compaction` agents use by default, so each is pinned. Build
   and plan use the top-level `model`, and subagents use their session's model.
-- `capabilities.reasoning` gives the low, medium and high variants. With none
-  chosen, Inkling's default `high` applies.
+- `capabilities.reasoning` gives a variant for each effort word Inkling's
+  template knows. OpenCode sends the chosen one as `reasoning_effort`.
+  `none` is the shortest, though the model still reasons a little. With
+  none chosen, Inkling's default `high` applies.
 - `chunkTimeout`: by default OpenCode gives up on a stream after 15 minutes
   without a chunk. A cold prompt near the limit takes longer than that to
   read: about 20 minutes on the M1 Max. mlx-serve
